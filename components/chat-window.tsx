@@ -2,10 +2,11 @@
 
 import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport, UIMessage } from "ai";
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import MessageBubble from "./message-bubble";
 import ToolCallIndicator from "./tool-call-indicator";
 import VoiceMode from "./voice-mode";
+import ChatModeSelector, { ChatMode } from "./chat-mode-selector";
 import { ArrowUp } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -16,14 +17,34 @@ interface Props {
 
 export default function ChatWindow({ conversationId, initialMessages = [] }: Props) {
   const [input, setInput] = useState("");
+  const [mode, setMode] = useState<ChatMode>(null);
+  const modeRef = useRef<ChatMode>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
+  // Keep ref in sync with state so the custom fetch closure always sees current mode
+  modeRef.current = mode;
+
+  const transport = useMemo(
+    () =>
+      new DefaultChatTransport({
+        api: "/api/chat",
+        body: { conversationId },
+        fetch: async (url, init) => {
+          if (init?.body && typeof init.body === "string") {
+            const parsed = JSON.parse(init.body);
+            if (modeRef.current) parsed.mode = modeRef.current;
+            return fetch(url, { ...init, body: JSON.stringify(parsed) });
+          }
+          return fetch(url, init);
+        },
+      }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [conversationId]
+  );
+
   const { messages, sendMessage, status } = useChat({
-    transport: new DefaultChatTransport({
-      api: "/api/chat",
-      body: { conversationId },
-    }),
+    transport,
     messages: initialMessages,
   });
 
@@ -57,51 +78,75 @@ export default function ChatWindow({ conversationId, initialMessages = [] }: Pro
     }
   }
 
-  const handleVoiceTranscript = useCallback((text: string) => {
-    setInput("");
-    sendMessage({ text });
-  }, [sendMessage]);
+  const handleVoiceTranscript = useCallback(
+    (text: string) => {
+      setInput("");
+      sendMessage({ text });
+    },
+    [sendMessage]
+  );
 
   const handleVoiceInterim = useCallback((text: string) => {
     setInput(text);
   }, []);
 
+  const modeSelector = (
+    <ChatModeSelector mode={mode} onChange={setMode} />
+  );
+
   const inputBox = (
-    <div
-      className={cn(
-        "flex items-center gap-3 rounded-2xl border-2 bg-white px-4 py-3.5 shadow-lg transition-all",
-        "border-slate-300 focus-within:border-slate-500 focus-within:shadow-xl"
-      )}
-    >
-      <textarea
-        ref={inputRef}
-        rows={1}
-        value={input}
-        onChange={(e) => setInput(e.target.value)}
-        onKeyDown={handleKeyDown}
-        placeholder="Message time-4-action AI…"
-        className="flex-1 bg-transparent text-sm text-slate-800 placeholder:text-slate-500 outline-none resize-none leading-relaxed max-h-40"
-        disabled={isLoading}
-      />
-      <VoiceMode
-        messages={messages}
-        status={status}
-        onTranscript={handleVoiceTranscript}
-        onInterim={handleVoiceInterim}
-      />
-      <button
-        onClick={() => handleSubmit()}
-        disabled={isLoading || !input.trim()}
+    <div className="space-y-2">
+      {modeSelector}
+      <div
         className={cn(
-          "h-9 w-9 rounded-xl flex items-center justify-center shrink-0 transition-all",
-          input.trim() && !isLoading
-            ? "bg-[#0f172a] text-white shadow-sm hover:bg-slate-700"
-            : "bg-slate-200 text-slate-400"
+          "flex items-center gap-3 rounded-2xl border-2 bg-white px-4 py-3.5 shadow-lg transition-all",
+          mode === "email"
+            ? "border-blue-400 focus-within:border-blue-600"
+            : mode === "quick-info"
+            ? "border-amber-400 focus-within:border-amber-500"
+            : "border-slate-300 focus-within:border-slate-500 focus-within:shadow-xl"
         )}
-        aria-label="Send"
       >
-        <ArrowUp className="h-4 w-4" />
-      </button>
+        <textarea
+          ref={inputRef}
+          rows={1}
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          onKeyDown={handleKeyDown}
+          placeholder={
+            mode === "email"
+              ? "Describe the email you need…"
+              : mode === "quick-info"
+              ? "Ask for a quick answer…"
+              : "Message time-4-action AI…"
+          }
+          className="flex-1 bg-transparent text-sm text-slate-800 placeholder:text-slate-500 outline-none resize-none leading-relaxed max-h-40"
+          disabled={isLoading}
+        />
+        <VoiceMode
+          messages={messages}
+          status={status}
+          onTranscript={handleVoiceTranscript}
+          onInterim={handleVoiceInterim}
+        />
+        <button
+          onClick={() => handleSubmit()}
+          disabled={isLoading || !input.trim()}
+          className={cn(
+            "h-9 w-9 rounded-xl flex items-center justify-center shrink-0 transition-all",
+            input.trim() && !isLoading
+              ? mode === "email"
+                ? "bg-blue-600 text-white shadow-sm hover:bg-blue-700"
+                : mode === "quick-info"
+                ? "bg-amber-500 text-white shadow-sm hover:bg-amber-600"
+                : "bg-[#0f172a] text-white shadow-sm hover:bg-slate-700"
+              : "bg-slate-200 text-slate-400"
+          )}
+          aria-label="Send"
+        >
+          <ArrowUp className="h-4 w-4" />
+        </button>
+      </div>
     </div>
   );
 
@@ -111,9 +156,17 @@ export default function ChatWindow({ conversationId, initialMessages = [] }: Pro
         <div className="flex-1 flex flex-col items-center justify-center px-4">
           <div className="w-full max-w-3xl">
             <div className="text-center mb-8">
-              <img src="/favicon.ico" alt="logo" className="w-14 h-14 object-contain mx-auto mb-4" />
-              <h2 className="text-slate-800 font-semibold text-2xl">How can I help you?</h2>
-              <p className="text-slate-400 text-sm mt-1.5">Ask about products, orders, or customer data.</p>
+              <img
+                src="/favicon.ico"
+                alt="logo"
+                className="w-14 h-14 object-contain mx-auto mb-4"
+              />
+              <h2 className="text-slate-800 font-semibold text-2xl">
+                How can I help you?
+              </h2>
+              <p className="text-slate-400 text-sm mt-1.5">
+                Ask about products, orders, or customer data.
+              </p>
             </div>
             {inputBox}
             <p className="text-center text-[11px] text-slate-400 mt-2">
@@ -127,7 +180,6 @@ export default function ChatWindow({ conversationId, initialMessages = [] }: Pro
 
   return (
     <div className="flex flex-col h-full bg-gray-100">
-
       {/* Messages */}
       <div className="flex-1 overflow-y-auto">
         <div className="max-w-3xl mx-auto px-4 py-6 space-y-5">

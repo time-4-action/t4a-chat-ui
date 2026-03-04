@@ -14,6 +14,7 @@ import {
   SquarePen,
   Trash2,
   Lightbulb,
+  Settings,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useUser } from "@auth0/nextjs-auth0/client";
@@ -289,8 +290,26 @@ export default function ConversationSidebar({ open, onToggle, mobileClose }: Pro
       {/* Divider */}
       <div className="mx-3 h-px bg-slate-100" />
 
+      {/* Settings */}
+      <div className="px-3 py-1 shrink-0">
+        <a
+          href="/settings"
+          title="Settings"
+          className={cn(
+            "flex items-center gap-2.5 w-full rounded-xl py-2 text-sm transition-all",
+            pathname === "/settings"
+              ? "bg-slate-100 text-slate-900 font-medium"
+              : "text-slate-500 hover:bg-slate-100 hover:text-slate-700",
+            open ? "px-3" : "justify-center px-2"
+          )}
+        >
+          <Settings className={cn("h-4 w-4 shrink-0", pathname === "/settings" ? "text-slate-700" : "")} />
+          {open && <span>Settings</span>}
+        </a>
+      </div>
+
       {/* Request Improvement */}
-      <div className="px-3 py-2 shrink-0">
+      <div className="px-3 py-1 shrink-0">
         <button
           onClick={() => setShowFeedback(true)}
           title="Request Improvement"
