@@ -2,8 +2,6 @@ import { UIMessage } from "ai";
 import { cn } from "@/lib/utils";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { Sparkles } from "lucide-react";
-
 export default function MessageBubble({ message }: { message: UIMessage }) {
   const isUser = message.role === "user";
 
@@ -25,9 +23,7 @@ export default function MessageBubble({ message }: { message: UIMessage }) {
   return (
     <div className="flex gap-3 items-start">
       {/* AI avatar */}
-      <div className="w-7 h-7 rounded-full bg-gradient-to-br from-slate-700 to-[#0f172a] flex items-center justify-center shrink-0 shadow-md mt-0.5 ring-1 ring-slate-200">
-        <Sparkles className="h-3.5 w-3.5 text-white/90" />
-      </div>
+      <img src="/favicon.ico" alt="logo" className="hidden sm:block w-7 h-7 object-contain rounded-md shrink-0 mt-0.5" />
 
       {/* Bubble */}
       <div className="max-w-[85%] sm:max-w-[78%] rounded-2xl rounded-tl-sm px-4 py-3 text-sm leading-relaxed bg-white shadow-sm border border-slate-200 text-slate-800">

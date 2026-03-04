@@ -13,6 +13,7 @@ import {
   LogOut,
   SquarePen,
   Trash2,
+  Lightbulb,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useUser } from "@auth0/nextjs-auth0/client";
@@ -59,6 +60,7 @@ function groupConversations(conversations: Conversation[]) {
 export default function ConversationSidebar({ open, onToggle, mobileClose }: Props) {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [showFeedback, setShowFeedback] = useState(false);
   const [editTitle, setEditTitle] = useState("");
   const [loading, setLoading] = useState(false);
   const editRef = useRef<HTMLInputElement>(null);
@@ -261,8 +263,46 @@ export default function ConversationSidebar({ open, onToggle, mobileClose }: Pro
         ))}
       </div>
 
+      {/* Feedback modal */}
+      {showFeedback && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm" onClick={() => setShowFeedback(false)}>
+          <div className="bg-white rounded-2xl shadow-xl p-6 mx-4 max-w-sm w-full" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-base font-semibold text-slate-800">Request Improvement</h3>
+              <button onClick={() => setShowFeedback(false)} className="p-1 rounded-lg hover:bg-slate-100 text-slate-400 hover:text-slate-600 transition-colors">
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <p className="text-sm text-slate-600 leading-relaxed">
+              Have an idea or found something that could be better? Send us an email and we&apos;ll look into it.
+            </p>
+            <a
+              href="mailto:grega@time-4-action.com"
+              className="mt-4 flex items-center justify-center gap-2 w-full rounded-xl py-2.5 px-4 bg-[#0f172a] hover:bg-slate-700 text-white text-sm font-medium transition-colors"
+            >
+              grega@time-4-action.com
+            </a>
+          </div>
+        </div>
+      )}
+
       {/* Divider */}
       <div className="mx-3 h-px bg-slate-100" />
+
+      {/* Request Improvement */}
+      <div className="px-3 py-2 shrink-0">
+        <button
+          onClick={() => setShowFeedback(true)}
+          title="Request Improvement"
+          className={cn(
+            "flex items-center gap-2.5 w-full rounded-xl py-2 text-sm text-slate-500 hover:bg-slate-100 hover:text-slate-700 transition-all cursor-pointer",
+            open ? "px-3" : "justify-center px-2"
+          )}
+        >
+          <Lightbulb className="h-4 w-4 shrink-0" />
+          {open && <span>Request Improvement</span>}
+        </button>
+      </div>
 
       {/* User section */}
       <div className="p-3 shrink-0">

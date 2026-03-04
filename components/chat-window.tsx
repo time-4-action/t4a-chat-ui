@@ -6,7 +6,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import MessageBubble from "./message-bubble";
 import ToolCallIndicator from "./tool-call-indicator";
 import VoiceMode from "./voice-mode";
-import { ArrowUp, Sparkles } from "lucide-react";
+import { ArrowUp } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 interface Props {
@@ -111,9 +111,7 @@ export default function ChatWindow({ conversationId, initialMessages = [] }: Pro
         <div className="flex-1 flex flex-col items-center justify-center px-4">
           <div className="w-full max-w-3xl">
             <div className="text-center mb-8">
-              <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-slate-700 to-[#0f172a] flex items-center justify-center shadow-lg mx-auto mb-4">
-                <Sparkles className="h-6 w-6 text-white" />
-              </div>
+              <img src="/favicon.ico" alt="logo" className="w-14 h-14 object-contain mx-auto mb-4" />
               <h2 className="text-slate-800 font-semibold text-2xl">How can I help you?</h2>
               <p className="text-slate-400 text-sm mt-1.5">Ask about products, orders, or customer data.</p>
             </div>
