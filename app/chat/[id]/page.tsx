@@ -1,0 +1,51 @@
+import { auth0 } from "@/lib/auth";
+import { connectDB } from "@/lib/mongodb";
+import { Conversation } from "@/models/conversation";
+import { redirect, notFound } from "next/navigation";
+import ChatWindow from "@/components/chat-window";
+import { UIMessage } from "ai";
+import type { Metadata } from "next";
+
+export async function generateMetadata({
+  params,
+}: {
+  params: Promise<{ id: string }>;
+}): Promise<Metadata> {
+  const { id } = await params;
+  await connectDB();
+  const conversation = await Conversation.findById(id).select("title").lean();
+  const title = (conversation as any)?.title ?? "New Chat";
+  return { title: `Time 4 Action Chat - ${title}` };
+}
+
+export default async function ConversationPage({
+  params,
+}: {
+  params: Promise<{ id: string }>;
+}) {
+  const { id } = await params;
+  const session = await auth0.getSession();
+  if (!session) redirect("/auth/login");
+
+  await connectDB();
+  const conversation = await Conversation.findOne({
+    _id: id,
+    userId: session.user.sub,
+  });
+
+  if (!conversation) notFound();
+
+  const initialMessages: UIMessage[] = conversation.messages.map((m: any) => ({
+    id: m._id.toString(),
+    role: m.role as "user" | "assistant",
+    content: m.content,
+    parts: [{ type: "text" as const, text: m.content }],
+  }));
+
+  return (
+    <ChatWindow
+      conversationId={id}
+      initialMessages={initialMessages}
+    />
+  );
+}

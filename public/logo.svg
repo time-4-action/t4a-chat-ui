@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 36" fill="none">
+  <circle cx="18" cy="18" r="14" fill="#0f172a"/>
+  <path d="M13 18h10M18 13v10" stroke="white" stroke-width="2.5" stroke-linecap="round"/>
+  <text x="38" y="24" font-family="system-ui, sans-serif" font-size="14" font-weight="700" fill="#0f172a">time-4-action AI</text>
+</svg>
