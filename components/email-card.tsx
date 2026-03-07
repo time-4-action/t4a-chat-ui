@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Copy, Check, Mail } from "lucide-react";
+import { Copy, Check, Mail, ClipboardPaste } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
@@ -28,20 +28,37 @@ export function parseEmailFromText(text: string): EmailData | null {
   }
 }
 
-function buildMailtoUrl(
-  provider: "gmail" | "outlook" | "default",
-  email: EmailData
-) {
-  const subject = encodeURIComponent(email.subject);
-  const body = encodeURIComponent(email.body);
-  const to = encodeURIComponent(email.to ?? "");
-  if (provider === "gmail") {
-    return `https://mail.google.com/mail/?view=cm&to=${to}&su=${subject}&body=${body}`;
-  }
-  if (provider === "outlook") {
-    return `https://outlook.office.com/mail/deeplink/compose?to=${to}&subject=${subject}&body=${body}`;
-  }
-  return `mailto:${to}?subject=${subject}&body=${body}`;
+function htmlToText(html: string): string {
+  return html
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/p>/gi, "\n")
+    .replace(/<\/div>/gi, "\n")
+    .replace(/<[^>]+>/g, "")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&nbsp;/g, " ")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+/** Convert markdown (as the AI generates it) to HTML for rich clipboard paste */
+function markdownToHtml(md: string): string {
+  const escaped = md
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+  return escaped
+    .split(/\n\n+/)
+    .map((block) => {
+      const inline = block
+        .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
+        .replace(/\*(.+?)\*/g, "<em>$1</em>")
+        .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2">$1</a>')
+        .replace(/\n/g, "<br>");
+      return `<p style="margin:0 0 8px 0">${inline}</p>`;
+    })
+    .join("");
 }
 
 function GmailIcon({ className }: { className?: string }) {
@@ -75,46 +92,103 @@ function OutlookIcon({ className }: { className?: string }) {
   );
 }
 
-const SEND_BUTTONS = [
-  {
-    provider: "gmail" as const,
-    label: "Gmail",
-    hover: "hover:bg-red-50 hover:border-red-200 hover:text-red-600",
-    icon: <GmailIcon className="h-3.5 w-3.5" />,
-  },
-  {
-    provider: "outlook" as const,
-    label: "Outlook",
-    hover: "hover:bg-blue-50 hover:border-blue-200 hover:text-blue-600",
-    icon: <OutlookIcon className="h-3.5 w-3.5" />,
-  },
-  {
-    provider: "default" as const,
-    label: "Mail App",
-    hover: "hover:bg-slate-100 hover:border-slate-300 hover:text-slate-800",
-    icon: <Mail className="h-3.5 w-3.5" />,
-  },
-];
-
-export default function EmailCard({ email }: { email: EmailData }) {
+export default function EmailCard({
+  email,
+  signatureHtml = "",
+}: {
+  email: EmailData;
+  signatureHtml?: string;
+}) {
   const [copied, setCopied] = useState(false);
+  const [openedProvider, setOpenedProvider] = useState<string | null>(null);
 
-  async function copyToClipboard() {
-    const text = [
+  const signaturePlain = signatureHtml ? htmlToText(signatureHtml) : "";
+
+  /** Build the full email as HTML for rich clipboard paste into Gmail/Outlook.
+   *  Gmail's paste sanitiser blocks data: URIs, so we strip them from images
+   *  (they still appear in the preview card — just not in the pasted version). */
+  function buildRichHtml() {
+    const bodyHtml = markdownToHtml(email.body);
+    const sig = signatureHtml
+      ? signatureHtml.replace(/src="data:[^"]*"/gi, 'src=""')
+      : "";
+    return `<div style="font-family:sans-serif;font-size:14px;color:#1e293b;line-height:1.6">${bodyHtml}${sig ? `<div style="margin-top:16px">${sig}</div>` : ""}</div>`;
+  }
+
+  async function copyRichToClipboard() {
+    const html = buildRichHtml();
+    const plain = [email.body, ...(signaturePlain ? ["", signaturePlain] : [])].join("\n");
+    try {
+      await navigator.clipboard.write([
+        new ClipboardItem({
+          "text/html": new Blob([html], { type: "text/html" }),
+          "text/plain": new Blob([plain], { type: "text/plain" }),
+        }),
+      ]);
+    } catch {
+      await navigator.clipboard.writeText(plain);
+    }
+  }
+
+  async function copyPlainToClipboard() {
+    const parts = [
       email.to ? `To: ${email.to}` : "",
       `Subject: ${email.subject}`,
       "",
       email.body,
-    ]
-      .filter((l, i) => i !== 0 || l)
-      .join("\n");
-    await navigator.clipboard.writeText(text);
+      ...(signaturePlain ? ["", signaturePlain] : []),
+    ].filter((l, i) => i !== 0 || l);
+    await navigator.clipboard.writeText(parts.join("\n"));
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   }
 
+  async function openInProvider(provider: "gmail" | "outlook" | "default") {
+    const subject = encodeURIComponent(email.subject);
+    const to = encodeURIComponent(email.to ?? "");
+
+    if (provider === "default") {
+      // mailto only supports plain text — include full content
+      const plain = [email.body, ...(signaturePlain ? ["", signaturePlain] : [])].join("\n");
+      window.location.href = `mailto:${to}?subject=${subject}&body=${encodeURIComponent(plain)}`;
+      return;
+    }
+
+    // For Gmail/Outlook: copy rich HTML to clipboard, open compose with just subject+to
+    await copyRichToClipboard();
+    setOpenedProvider(provider);
+    setTimeout(() => setOpenedProvider(null), 3000);
+
+    const url =
+      provider === "gmail"
+        ? `https://mail.google.com/mail/?view=cm&to=${to}&su=${subject}`
+        : `https://outlook.office.com/mail/deeplink/compose?to=${to}&subject=${subject}`;
+    window.open(url, "_blank");
+  }
+
+  const SEND_BUTTONS = [
+    {
+      provider: "gmail" as const,
+      label: "Gmail",
+      hover: "hover:bg-red-50 hover:border-red-200 hover:text-red-600",
+      icon: <GmailIcon className="h-3.5 w-3.5" />,
+    },
+    {
+      provider: "outlook" as const,
+      label: "Outlook",
+      hover: "hover:bg-blue-50 hover:border-blue-200 hover:text-blue-600",
+      icon: <OutlookIcon className="h-3.5 w-3.5" />,
+    },
+    {
+      provider: "default" as const,
+      label: "Mail App",
+      hover: "hover:bg-slate-100 hover:border-slate-300 hover:text-slate-800",
+      icon: <Mail className="h-3.5 w-3.5" />,
+    },
+  ];
+
   return (
-    <div className="rounded-2xl border border-blue-100 bg-white shadow-md overflow-hidden w-full max-w-[85%] sm:max-w-[78%]">
+    <div className="rounded-2xl border border-blue-100 bg-white shadow-md w-full max-w-[85%] sm:max-w-[78%] overflow-x-hidden">
       {/* Header bar */}
       <div className="flex items-center justify-between px-4 py-2.5 bg-gradient-to-r from-blue-600 to-blue-500">
         <div className="flex items-center gap-2 text-white">
@@ -122,14 +196,10 @@ export default function EmailCard({ email }: { email: EmailData }) {
           <span className="text-sm font-semibold tracking-wide">Email Draft</span>
         </div>
         <button
-          onClick={copyToClipboard}
+          onClick={copyPlainToClipboard}
           className="flex items-center gap-1.5 text-xs text-blue-100 hover:text-white px-2.5 py-1 rounded-lg hover:bg-white/20 transition-colors"
         >
-          {copied ? (
-            <Check className="h-3.5 w-3.5" />
-          ) : (
-            <Copy className="h-3.5 w-3.5" />
-          )}
+          {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
           {copied ? "Copied!" : "Copy"}
         </button>
       </div>
@@ -139,9 +209,7 @@ export default function EmailCard({ email }: { email: EmailData }) {
         <div className="flex items-baseline gap-3 text-sm">
           <span className="text-slate-400 font-medium w-14 shrink-0">To</span>
           <span className="text-slate-700 break-all">
-            {email.to || (
-              <span className="text-slate-400 italic">Not specified</span>
-            )}
+            {email.to || <span className="text-slate-400 italic">Not specified</span>}
           </span>
         </div>
         <div className="flex items-baseline gap-3 text-sm">
@@ -151,7 +219,7 @@ export default function EmailCard({ email }: { email: EmailData }) {
       </div>
 
       {/* Body */}
-      <div className="px-4 py-3 text-sm text-slate-700 leading-relaxed prose prose-sm max-w-none">
+      <div className="px-4 pt-3 text-sm text-slate-700 leading-relaxed prose prose-sm max-w-none">
         <ReactMarkdown
           remarkPlugins={[remarkGfm]}
           components={{
@@ -174,23 +242,41 @@ export default function EmailCard({ email }: { email: EmailData }) {
         </ReactMarkdown>
       </div>
 
+      {/* Signature — completely outside prose to avoid Typography style bleed */}
+      {signatureHtml && (
+        <div className="px-4 pt-3 pb-1">
+          <div
+            style={{ font: "inherit", fontSize: 14, color: "#334155", lineHeight: 1.6 }}
+            dangerouslySetInnerHTML={{ __html: signatureHtml }}
+          />
+          {/* Clearfix so floated images don't collapse the container */}
+          <div style={{ clear: "both" }} />
+        </div>
+      )}
+
+      {!signatureHtml && <div className="pb-3" />}
+
       {/* Send actions */}
-      <div className="px-4 py-2.5 bg-slate-50 border-t border-slate-100 flex items-center gap-2 flex-wrap">
-        <span className="text-[11px] text-slate-400 font-medium mr-1">
-          Open in:
-        </span>
-        {SEND_BUTTONS.map(({ provider, label, hover, icon }) => (
-          <a
-            key={provider}
-            href={buildMailtoUrl(provider, email)}
-            target={provider !== "default" ? "_blank" : undefined}
-            rel="noopener noreferrer"
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-white border border-slate-200 text-slate-600 transition-colors ${hover}`}
-          >
-            {icon}
-            {label}
-          </a>
-        ))}
+      <div className="px-4 py-2.5 bg-slate-50 border-t border-slate-100 space-y-2">
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="text-[11px] text-slate-400 font-medium mr-1">Open in:</span>
+          {SEND_BUTTONS.map(({ provider, label, hover, icon }) => (
+            <button
+              key={provider}
+              onClick={() => openInProvider(provider)}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-white border border-slate-200 text-slate-600 transition-colors cursor-pointer ${hover}`}
+            >
+              {icon}
+              {label}
+            </button>
+          ))}
+        </div>
+        {openedProvider && (
+          <div className="flex items-center gap-1.5 text-[11px] text-blue-600">
+            <ClipboardPaste className="h-3 w-3 shrink-0" />
+            <span>Rich email copied — paste it into the compose window (<kbd className="font-mono bg-blue-50 px-1 rounded">Ctrl+V</kbd>)</span>
+          </div>
+        )}
       </div>
     </div>
   );

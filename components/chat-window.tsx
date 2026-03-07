@@ -7,41 +7,73 @@ import MessageBubble from "./message-bubble";
 import ToolCallIndicator from "./tool-call-indicator";
 import VoiceMode from "./voice-mode";
 import ChatModeSelector, { ChatMode } from "./chat-mode-selector";
-import { ArrowUp } from "lucide-react";
+import ModelSelector from "./model-selector";
+import { ArrowUp, DollarSign } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { DEFAULT_MODEL, ModelId, formatCost } from "@/lib/models";
 
 interface Props {
   conversationId: string;
   initialMessages?: UIMessage[];
+  initialModel?: ModelId;
+  initialCost?: number;
 }
 
-export default function ChatWindow({ conversationId, initialMessages = [] }: Props) {
+export default function ChatWindow({
+  conversationId,
+  initialMessages = [],
+  initialModel,
+  initialCost = 0,
+}: Props) {
   const [input, setInput] = useState("");
   const [mode, setMode] = useState<ChatMode>(null);
+  const [signatureHtml, setSignatureHtml] = useState("");
+  const [model, setModel] = useState<ModelId>(initialModel ?? DEFAULT_MODEL);
+  const [costUsd, setCostUsd] = useState(initialCost);
+
+  useEffect(() => {
+    fetch("/api/preferences")
+      .then((r) => r.json())
+      .then((p) => setSignatureHtml(p?.communicationStyle?.signatureStyle ?? ""))
+      .catch(() => {});
+  }, []);
+
   const modeRef = useRef<ChatMode>(null);
+  const modelRef = useRef<ModelId>(model);
+  const conversationIdRef = useRef(conversationId);
   const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
-  // Keep ref in sync with state so the custom fetch closure always sees current mode
+  // Keep refs in sync so transport fetch closure always sees current values
   modeRef.current = mode;
+  modelRef.current = model;
 
   const transport = useMemo(
     () =>
       new DefaultChatTransport({
         api: "/api/chat",
-        body: { conversationId },
+        body: {},
         fetch: async (url, init) => {
           if (init?.body && typeof init.body === "string") {
             const parsed = JSON.parse(init.body);
+            parsed.conversationId = conversationIdRef.current;
+            parsed.model = modelRef.current;
             if (modeRef.current) parsed.mode = modeRef.current;
             return fetch(url, { ...init, body: JSON.stringify(parsed) });
           }
           return fetch(url, init);
         },
       }),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [conversationId]
+    []
   );
+
+  const ensureConversation = useCallback(async () => {
+    if (conversationIdRef.current !== "new") return;
+    const res = await fetch("/api/conversations", { method: "POST" });
+    const conv = await res.json();
+    conversationIdRef.current = conv._id;
+    window.history.replaceState(null, "", `/chat/${conv._id}`);
+  }, []);
 
   const { messages, sendMessage, status } = useChat({
     transport,
@@ -50,6 +82,37 @@ export default function ChatWindow({ conversationId, initialMessages = [] }: Pro
 
   const isLoading = status === "submitted" || status === "streaming";
   const isEmpty = messages.length === 0 && !isLoading;
+
+  // Fetch updated cost after each AI response completes.
+  // Retries up to 5x / 500ms apart to handle the async onFinish DB write.
+  useEffect(() => {
+    if (status !== "ready" || conversationIdRef.current === "new") return;
+
+    let cancelled = false;
+    let attempt = 0;
+
+    async function tryFetch() {
+      if (cancelled) return;
+      try {
+        const r = await fetch(`/api/conversations/${conversationIdRef.current}`);
+        const conv = await r.json();
+        console.log(`[cost] attempt ${attempt + 1}:`, conv.totalCostUsd, "model:", conv.model);
+        const cost = conv.totalCostUsd ?? 0;
+        if (cost > 0) {
+          setCostUsd(cost);
+        } else if (attempt < 5) {
+          attempt++;
+          setTimeout(tryFetch, 600);
+        }
+      } catch (e) {
+        console.error("[cost] fetch error:", e);
+      }
+    }
+
+    // Initial delay to let onFinish DB write start
+    const timer = setTimeout(tryFetch, 400);
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [status]);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -68,6 +131,7 @@ export default function ChatWindow({ conversationId, initialMessages = [] }: Pro
     if (!text || isLoading) return;
     setInput("");
     if (inputRef.current) inputRef.current.style.height = "auto";
+    await ensureConversation();
     await sendMessage({ text });
   }
 
@@ -79,16 +143,30 @@ export default function ChatWindow({ conversationId, initialMessages = [] }: Pro
   }
 
   const handleVoiceTranscript = useCallback(
-    (text: string) => {
+    async (text: string) => {
       setInput("");
+      await ensureConversation();
       sendMessage({ text });
     },
-    [sendMessage]
+    [sendMessage, ensureConversation]
   );
 
   const handleVoiceInterim = useCallback((text: string) => {
     setInput(text);
   }, []);
+
+  const topBar = (
+    <div className="flex items-center justify-between px-4 py-2 border-b border-slate-200 bg-white/80 backdrop-blur-sm shrink-0">
+      <ModelSelector value={model} onChange={setModel} />
+      {(costUsd > 0 || isLoading) && messages.length > 0 && (
+        <div className="flex items-center gap-1 text-xs text-slate-400">
+          <DollarSign className="w-3 h-3" />
+          <span>{costUsd > 0 ? formatCost(costUsd) : "…"}</span>
+          <span className="text-slate-300">this chat</span>
+        </div>
+      )}
+    </div>
+  );
 
   const modeSelector = (
     <ChatModeSelector mode={mode} onChange={setMode} />
@@ -153,6 +231,7 @@ export default function ChatWindow({ conversationId, initialMessages = [] }: Pro
   if (isEmpty) {
     return (
       <div className="flex flex-col h-full bg-gray-100">
+        {topBar}
         <div className="flex-1 flex flex-col items-center justify-center px-4">
           <div className="w-full max-w-3xl">
             <div className="text-center mb-8">
@@ -180,11 +259,13 @@ export default function ChatWindow({ conversationId, initialMessages = [] }: Pro
 
   return (
     <div className="flex flex-col h-full bg-gray-100">
+      {topBar}
+
       {/* Messages */}
       <div className="flex-1 overflow-y-auto">
         <div className="max-w-3xl mx-auto px-4 py-6 space-y-5">
           {messages.map((m) => (
-            <MessageBubble key={m.id} message={m} />
+            <MessageBubble key={m.id} message={m} signatureHtml={signatureHtml} />
           ))}
           {isLoading && <ToolCallIndicator />}
           <div ref={bottomRef} />

@@ -7,7 +7,7 @@ import EmailCard, { parseEmailFromText } from "./email-card";
 const isEmailInProgress = (text: string) =>
   text.includes('"type"') && text.includes('"email"') && !parseEmailFromText(text);
 
-export default function MessageBubble({ message }: { message: UIMessage }) {
+export default function MessageBubble({ message, signatureHtml = "" }: { message: UIMessage; signatureHtml?: string }) {
   const isUser = message.role === "user";
 
   const textContent = message.parts
@@ -35,7 +35,7 @@ export default function MessageBubble({ message }: { message: UIMessage }) {
           alt="logo"
           className="hidden sm:block w-7 h-7 object-contain rounded-md shrink-0 mt-0.5"
         />
-        <EmailCard email={emailData} />
+        <EmailCard email={emailData} signatureHtml={signatureHtml} />
       </div>
     );
   }

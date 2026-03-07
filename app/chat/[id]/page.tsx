@@ -4,6 +4,7 @@ import { Conversation } from "@/models/conversation";
 import { redirect, notFound } from "next/navigation";
 import ChatWindow from "@/components/chat-window";
 import { UIMessage } from "ai";
+import { DEFAULT_MODEL, ModelId } from "@/lib/models";
 import type { Metadata } from "next";
 
 export async function generateMetadata({
@@ -35,7 +36,11 @@ export default async function ConversationPage({
 
   if (!conversation) notFound();
 
-  const initialMessages: UIMessage[] = conversation.messages.map((m: any) => ({
+  // Use .toObject() to get a plain JS object — `conversation.model` conflicts
+  // with Mongoose's internal Model reference and can't be serialized to client.
+  const conv = conversation.toObject();
+
+  const initialMessages: UIMessage[] = conv.messages.map((m: any) => ({
     id: m._id.toString(),
     role: m.role as "user" | "assistant",
     content: m.content,
@@ -46,6 +51,8 @@ export default async function ConversationPage({
     <ChatWindow
       conversationId={id}
       initialMessages={initialMessages}
+      initialModel={(conv.model as ModelId) ?? DEFAULT_MODEL}
+      initialCost={conv.totalCostUsd ?? 0}
     />
   );
 }

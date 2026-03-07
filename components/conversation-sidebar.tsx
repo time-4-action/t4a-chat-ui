@@ -63,7 +63,6 @@ export default function ConversationSidebar({ open, onToggle, mobileClose }: Pro
   const [editingId, setEditingId] = useState<string | null>(null);
   const [showFeedback, setShowFeedback] = useState(false);
   const [editTitle, setEditTitle] = useState("");
-  const [loading, setLoading] = useState(false);
   const editRef = useRef<HTMLInputElement>(null);
   const pathname = usePathname();
   const { user } = useUser();
@@ -79,16 +78,9 @@ export default function ConversationSidebar({ open, onToggle, mobileClose }: Pro
     if (editingId) editRef.current?.focus();
   }, [editingId]);
 
-  async function handleNewChat() {
-    setLoading(true);
-    try {
-      const res = await fetch("/api/conversations", { method: "POST" });
-      const conversation = await res.json();
-      mobileClose?.();
-      window.location.href = `/chat/${conversation._id}`;
-    } finally {
-      setLoading(false);
-    }
+  function handleNewChat() {
+    mobileClose?.();
+    window.location.href = "/chat/new";
   }
 
   async function handleDelete(id: string, e: React.MouseEvent) {
@@ -136,20 +128,20 @@ export default function ConversationSidebar({ open, onToggle, mobileClose }: Pro
     <div className="flex flex-col h-full bg-white">
 
       {/* Brand header */}
-      <div className={cn("flex items-center h-16 shrink-0 px-4 border-b border-slate-100", open ? "justify-between" : "justify-center")}>
-        {open ? (
+      <div className="flex items-center justify-between h-16 shrink-0 px-4 border-b border-slate-100">
+        {open && (
           <div className="flex items-center gap-2.5">
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img src="/favicon.ico" alt="logo" className="h-7 w-7 object-contain rounded-md" />
             <span className="text-sm font-semibold text-slate-800">Time 4 Action</span>
           </div>
-        ) : (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img src="/favicon.ico" alt="logo" className="h-7 w-7 object-contain rounded-md" />
         )}
         <button
           onClick={mobileClose ?? onToggle}
-          className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-400 hover:text-slate-600 transition-colors shrink-0 ml-2"
+          className={cn(
+            "p-1.5 rounded-lg hover:bg-slate-100 text-slate-400 hover:text-slate-600 transition-colors shrink-0",
+            !open && "mx-auto"
+          )}
         >
           {open ? <ChevronLeft className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
         </button>
@@ -159,12 +151,10 @@ export default function ConversationSidebar({ open, onToggle, mobileClose }: Pro
       <div className="px-3 pt-3 pb-2">
         <button
           onClick={handleNewChat}
-          disabled={loading}
           title="New Chat"
           className={cn(
             "flex items-center gap-2.5 w-full rounded-xl py-2.5 text-sm font-medium transition-all",
             "bg-[#0f172a] hover:bg-slate-700 text-white shadow-sm",
-            "disabled:opacity-50",
             open ? "px-4" : "justify-center px-2"
           )}
         >

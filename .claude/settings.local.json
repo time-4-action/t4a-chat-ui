@@ -11,7 +11,8 @@
       "Bash(python3:*)",
       "Bash(npm show:*)",
       "Bash(npx tsc:*)",
-      "Bash(rm:*)"
+      "Bash(rm:*)",
+      "mcp__ide__getDiagnostics"
     ]
   }
 }

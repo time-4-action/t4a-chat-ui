@@ -15,7 +15,7 @@ export async function GET(
   const conversation = await Conversation.findOne({
     _id: id,
     userId: session.user.sub,
-  });
+  }).lean();
 
   if (!conversation) return NextResponse.json({ error: "Not found" }, { status: 404 });
   return NextResponse.json(conversation);
