@@ -2,6 +2,14 @@
 
 import { useEffect, useRef, useState } from "react";
 import QuillEditor from "@/components/quill-editor";
+import { MODEL_CONFIGS, formatCost } from "@/lib/models";
+import type { ModelId } from "@/lib/models";
+
+interface UsageData {
+  totalCostUsd: number;
+  conversationCount: number;
+  byModel: { modelId: string; conversationCount: number; inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheCreationTokens: number; totalCostUsd: number }[];
+}
 
 interface Memory {
   workContext: string;
@@ -66,6 +74,7 @@ const NAV = [
   { id: "email",         label: "Email style" },
   { id: "instructions",  label: "Instructions" },
   { id: "memory",        label: "Memory" },
+  { id: "usage",         label: "Usage" },
 ];
 
 export default function SettingsPage() {
@@ -74,6 +83,8 @@ export default function SettingsPage() {
   const [memory, setMemory] = useState<Memory>({
     workContext: "", personalContext: "", topOfMind: "", recentActivity: "", updatedAt: null,
   });
+  const [usage, setUsage] = useState<UsageData | null>(null);
+  const [usageLoading, setUsageLoading] = useState(true);
   const [autofilling, setAutofilling] = useState<Record<string, boolean>>({});
   const [importOpen, setImportOpen] = useState(false);
   const [importText, setImportText] = useState("");
@@ -114,9 +125,14 @@ export default function SettingsPage() {
     }).catch(console.error);
 
     fetch("/api/memory").then((r) => r.json()).then(setMemory).catch(console.error);
+
+    fetch("/api/usage")
+      .then((r) => r.json())
+      .then((d) => { setUsage(d); setUsageLoading(false); })
+      .catch(() => setUsageLoading(false));
   }, []);
 
-  async function handleAutofill(section: "profile" | "communication" | "email") {
+  async function handleAutofill(section: "profile" | "communication" | "email" | "signature") {
     setAutofilling((s) => ({ ...s, [section]: true }));
     try {
       const res = await fetch("/api/preferences/autofill", {
@@ -538,6 +554,73 @@ export default function SettingsPage() {
               </div>
             </section>
 
+            {/* Usage */}
+            <Card id="usage" title="Usage" description="Your API usage and cost overview.">
+              {usageLoading ? (
+                <div className="flex gap-3">
+                  <div className="h-16 flex-1 rounded-xl bg-gray-100 animate-pulse" />
+                  <div className="h-16 flex-1 rounded-xl bg-gray-100 animate-pulse" />
+                </div>
+              ) : !usage ? (
+                <p className="text-sm text-gray-400 italic">Failed to load usage data.</p>
+              ) : (
+                <div className="space-y-4">
+                  <div className="flex gap-3">
+                    <div className="flex-1 rounded-xl bg-gray-50 border border-gray-100 px-4 py-3">
+                      <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-widest mb-1">Total cost</p>
+                      <p className="text-lg font-semibold text-gray-900">{formatCost(usage.totalCostUsd)}</p>
+                    </div>
+                    <div className="flex-1 rounded-xl bg-gray-50 border border-gray-100 px-4 py-3">
+                      <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-widest mb-1">Conversations</p>
+                      <p className="text-lg font-semibold text-gray-900">{usage.conversationCount}</p>
+                    </div>
+                  </div>
+
+                  {usage.byModel.length === 0 ? (
+                    <p className="text-sm text-gray-400 italic">No usage yet — start chatting to see your stats here.</p>
+                  ) : (
+                    <div className="rounded-xl border border-gray-100 overflow-hidden">
+                      <table className="w-full text-sm">
+                        <thead>
+                          <tr className="border-b border-gray-100 bg-gray-50">
+                            <th className="text-left px-4 py-2.5 text-[10px] font-semibold text-gray-400 uppercase tracking-widest">Model</th>
+                            <th className="text-right px-4 py-2.5 text-[10px] font-semibold text-gray-400 uppercase tracking-widest">Chats</th>
+                            <th className="text-right px-4 py-2.5 text-[10px] font-semibold text-gray-400 uppercase tracking-widest hidden sm:table-cell">Input tok</th>
+                            <th className="text-right px-4 py-2.5 text-[10px] font-semibold text-gray-400 uppercase tracking-widest hidden sm:table-cell">Output tok</th>
+                            <th className="text-right px-4 py-2.5 text-[10px] font-semibold text-gray-400 uppercase tracking-widest hidden lg:table-cell">Cache reads</th>
+                            <th className="text-right px-4 py-2.5 text-[10px] font-semibold text-gray-400 uppercase tracking-widest hidden lg:table-cell">Cache writes</th>
+                            <th className="text-right px-4 py-2.5 text-[10px] font-semibold text-gray-400 uppercase tracking-widest">Cost</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-gray-50">
+                          {usage.byModel.map((row) => {
+                            const cfg = MODEL_CONFIGS[row.modelId as ModelId];
+                            return (
+                              <tr key={row.modelId}>
+                                <td className="px-4 py-3">
+                                  <div className="flex items-center gap-2">
+                                    {cfg && <span className={`w-2 h-2 rounded-full shrink-0 ${cfg.dot}`} />}
+                                    <span className="text-gray-800 font-medium text-xs">{cfg?.modelName ?? row.modelId}</span>
+                                    {cfg && <span className={`text-[10px] font-medium ${cfg.text}`}>{cfg.tierName}</span>}
+                                  </div>
+                                </td>
+                                <td className="px-4 py-3 text-right text-xs text-gray-500">{row.conversationCount}</td>
+                                <td className="px-4 py-3 text-right text-xs text-gray-500 hidden sm:table-cell">{row.inputTokens.toLocaleString()}</td>
+                                <td className="px-4 py-3 text-right text-xs text-gray-500 hidden sm:table-cell">{row.outputTokens.toLocaleString()}</td>
+                                <td className="px-4 py-3 text-right text-xs text-emerald-600 hidden lg:table-cell">{row.cacheReadTokens.toLocaleString()}</td>
+                                <td className="px-4 py-3 text-right text-xs text-gray-500 hidden lg:table-cell">{row.cacheCreationTokens.toLocaleString()}</td>
+                                <td className="px-4 py-3 text-right text-xs text-gray-700 font-medium">{formatCost(row.totalCostUsd)}</td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              )}
+            </Card>
+
           </div>
         </main>
       </div>
@@ -655,5 +738,6 @@ function NavIcon({ id, active }: { id: string; active: boolean }) {
   if (id === "email")         return <svg className={cls} {...s}><path strokeLinecap="round" strokeLinejoin="round" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" /></svg>;
   if (id === "instructions")  return <svg className={cls} {...s}><path strokeLinecap="round" strokeLinejoin="round" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" /></svg>;
   if (id === "memory")        return <svg className={cls} {...s}><path strokeLinecap="round" strokeLinejoin="round" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" /></svg>;
+  if (id === "usage")         return <svg className={cls} {...s}><path strokeLinecap="round" strokeLinejoin="round" d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z" /></svg>;
   return null;
 }

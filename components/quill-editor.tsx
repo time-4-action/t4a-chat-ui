@@ -1,5 +1,6 @@
 "use client";
 
+import React from "react";
 import dynamic from "next/dynamic";
 import { useRef, useState, useEffect, useCallback, useMemo } from "react";
 import "react-quill-new/dist/quill.snow.css";
@@ -49,7 +50,7 @@ const ReactQuill = dynamic(
     return RQ;
   },
   { ssr: false }
-);
+) as any;
 
 interface Props {
   value: string;
@@ -121,22 +122,23 @@ export default function QuillEditor({ value, onChange }: Props) {
       e.preventDefault();
       e.stopPropagation();
       if (!overlay) return;
+      const currentOverlay = overlay;
 
       const startX = e.clientX;
-      const startWidth = overlay.width;
+      const startWidth = currentOverlay.width;
       const aspect =
-        overlay.el.naturalWidth && overlay.el.naturalHeight
-          ? overlay.el.naturalWidth / overlay.el.naturalHeight
-          : startWidth / overlay.height;
+        currentOverlay.el.naturalWidth && currentOverlay.el.naturalHeight
+          ? currentOverlay.el.naturalWidth / currentOverlay.el.naturalHeight
+          : startWidth / currentOverlay.height;
       const isLeft = corner === "nw" || corner === "sw";
 
       function onMove(ev: MouseEvent) {
         const dx = ev.clientX - startX;
         const newWidth = Math.max(20, startWidth + (isLeft ? -dx : dx));
-        overlay.el.style.width = `${Math.round(newWidth)}px`;
-        overlay.el.style.height = `${Math.round(newWidth / aspect)}px`;
+        currentOverlay.el.style.width = `${Math.round(newWidth)}px`;
+        currentOverlay.el.style.height = `${Math.round(newWidth / aspect)}px`;
         // Update overlay box live (no onChange → no React/Quill re-render during drag)
-        const o = calcOverlay(overlay.el);
+        const o = calcOverlay(currentOverlay.el);
         if (o) setOverlay(o);
       }
 

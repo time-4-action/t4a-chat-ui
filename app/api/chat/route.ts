@@ -1,6 +1,7 @@
 import { auth0 } from "@/lib/auth";
 import { connectDB } from "@/lib/mongodb";
 import { Conversation } from "@/models/conversation";
+import { UserUsage } from "@/models/user-usage";
 import { UserPreference } from "@/models/user-preference";
 import { UserMemory } from "@/models/user-memory";
 import { createAnthropic } from "@ai-sdk/anthropic";
@@ -208,6 +209,33 @@ Return ONLY valid JSON with these exact keys:
   );
 }
 
+// Mark the last message's last content block with Anthropic cache_control.
+// This caches the full prefix (tools + system + all prior messages) so subsequent
+// turns pay only 10% of input price for already-seen tokens.
+function withCacheControl(messages: any[]): any[] {
+  if (!messages.length) return messages;
+  const result = [...messages];
+  const last = { ...result[result.length - 1] };
+
+  if (typeof last.content === "string") {
+    last.content = [{
+      type: "text",
+      text: last.content,
+      experimental_providerMetadata: { anthropic: { cacheControl: { type: "ephemeral" } } },
+    }];
+  } else if (Array.isArray(last.content) && last.content.length > 0) {
+    const parts = [...last.content];
+    parts[parts.length - 1] = {
+      ...parts[parts.length - 1],
+      experimental_providerMetadata: { anthropic: { cacheControl: { type: "ephemeral" } } },
+    };
+    last.content = parts;
+  }
+
+  result[result.length - 1] = last;
+  return result;
+}
+
 export async function POST(req: NextRequest) {
   const session = await auth0.getSession();
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -221,7 +249,7 @@ export async function POST(req: NextRequest) {
 
   const modelId: ModelId = (requestedModel as ModelId) ?? DEFAULT_MODEL;
 
-  const messages = await convertToModelMessages(uiMessages);
+  const messages = withCacheControl(await convertToModelMessages(uiMessages));
 
   // Extract last user message text for MongoDB save
   const lastUserMsg = [...uiMessages].reverse().find((m) => m.role === "user");
@@ -251,7 +279,7 @@ export async function POST(req: NextRequest) {
     messages,
     stopWhen: stepCountIs(5),
     tools: mcpTools,
-    onFinish: async ({ text, usage }) => {
+    onFinish: async ({ text, usage, providerMetadata }) => {
       console.log("[chat] usage:", JSON.stringify(usage));
       await mcpClient.close();
 
@@ -262,10 +290,15 @@ export async function POST(req: NextRequest) {
       if (conversationId && text && lastUserText) {
         await connectDB();
         const isFirst = uiMessages.filter((m) => m.role === "user").length === 1;
-        const reqCost = calculateRequestCost(
-          modelId,
-          (usage as any)?.inputTokens ?? (usage as any)?.promptTokens ?? 0,
-          (usage as any)?.outputTokens ?? (usage as any)?.completionTokens ?? 0
+        const inputTokens        = (usage as any)?.inputTokens  ?? (usage as any)?.promptTokens     ?? 0;
+        const outputTokens       = (usage as any)?.outputTokens ?? (usage as any)?.completionTokens ?? 0;
+        const cacheReadTokens    = (providerMetadata as any)?.anthropic?.cacheReadInputTokens      ?? 0;
+        const cacheCreationTokens = (providerMetadata as any)?.anthropic?.cacheCreationInputTokens ?? 0;
+        const reqCost = calculateRequestCost(modelId, inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens);
+        await UserUsage.findOneAndUpdate(
+          { userId: session.user.sub, modelId },
+          { $inc: { totalCostUsd: reqCost, conversationCount: isFirst ? 1 : 0, inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens } },
+          { upsert: true }
         );
         await Conversation.findByIdAndUpdate(conversationId, {
           $push: {

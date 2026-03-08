@@ -56,10 +56,17 @@ export const DEFAULT_MODEL: ModelId = "claude-sonnet-4-6";
 export function calculateRequestCost(
   modelId: ModelId,
   inputTokens: number,
-  outputTokens: number
+  outputTokens: number,
+  cacheReadTokens = 0,
+  cacheCreationTokens = 0,
 ): number {
-  const config = MODEL_CONFIGS[modelId];
-  return (inputTokens * config.inputPrice + outputTokens * config.outputPrice) / 1_000_000;
+  const { inputPrice, outputPrice } = MODEL_CONFIGS[modelId];
+  return (
+    inputTokens       * inputPrice         +
+    outputTokens      * outputPrice        +
+    cacheReadTokens   * inputPrice * 0.1   +  // cache reads = 10% of input price
+    cacheCreationTokens * inputPrice * 1.25    // cache writes = 125% of input price
+  ) / 1_000_000;
 }
 
 export function formatCost(usd: number): string {
