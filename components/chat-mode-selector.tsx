@@ -27,11 +27,14 @@ const MODES = [
 interface Props {
   mode: ChatMode;
   onChange: (mode: ChatMode) => void;
+  disabled?: boolean;
+  toneSlot?: React.ReactNode;
 }
 
-export default function ChatModeSelector({ mode, onChange }: Props) {
+export default function ChatModeSelector({ mode, onChange, disabled, toneSlot }: Props) {
   return (
-    <div className="flex items-center gap-2 flex-wrap">
+    <div className="flex items-center gap-2">
+      <div className="flex items-center gap-2 flex-wrap flex-1">
       {MODES.map((m) => {
         const Icon = m.icon;
         const isActive = mode === m.id;
@@ -39,9 +42,11 @@ export default function ChatModeSelector({ mode, onChange }: Props) {
           <button
             key={m.id}
             type="button"
-            onClick={() => onChange(isActive ? null : m.id)}
+            onClick={() => !disabled && onChange(isActive ? null : m.id)}
+            disabled={disabled}
             className={cn(
               "flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold border transition-all duration-150 select-none",
+              disabled ? "opacity-50 cursor-not-allowed" : "",
               isActive ? m.activeClass : m.inactiveClass
             )}
           >
@@ -53,6 +58,8 @@ export default function ChatModeSelector({ mode, onChange }: Props) {
           </button>
         );
       })}
+      </div>
+      {toneSlot}
     </div>
   );
 }

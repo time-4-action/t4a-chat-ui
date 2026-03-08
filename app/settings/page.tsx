@@ -1,6 +1,8 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import AutofillModal, { type AutofillExtra, type AutofillSection } from "@/components/autofill-modal";
+import CreateToneModal, { type ToneDoc } from "@/components/create-tone-modal";
 import QuillEditor from "@/components/quill-editor";
 import { MODEL_CONFIGS, formatCost } from "@/lib/models";
 import type { ModelId } from "@/lib/models";
@@ -73,12 +75,14 @@ const NAV = [
   { id: "communication", label: "Communication" },
   { id: "email",         label: "Email style" },
   { id: "instructions",  label: "Instructions" },
+  { id: "tones",         label: "Tones" },
   { id: "memory",        label: "Memory" },
   { id: "usage",         label: "Usage" },
 ];
 
 export default function SettingsPage() {
   const [prefs, setPrefs] = useState<Preferences>(defaultPrefs);
+  const savedPrefs = useRef<Preferences>(defaultPrefs);
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [memory, setMemory] = useState<Memory>({
     workContext: "", personalContext: "", topOfMind: "", recentActivity: "", updatedAt: null,
@@ -86,45 +90,48 @@ export default function SettingsPage() {
   const [usage, setUsage] = useState<UsageData | null>(null);
   const [usageLoading, setUsageLoading] = useState(true);
   const [autofilling, setAutofilling] = useState<Record<string, boolean>>({});
+  const [modalSection, setModalSection] = useState<AutofillSection | null>(null);
   const [importOpen, setImportOpen] = useState(false);
   const [importText, setImportText] = useState("");
   const [importState, setImportState] = useState<"idle" | "loading" | "done" | "error">("idle");
   const [promptGuideOpen, setPromptGuideOpen] = useState(false);
   const [promptCopied, setPromptCopied] = useState(false);
   const [activeSection, setActiveSection] = useState("profile");
+  const [tones, setTones] = useState<ToneDoc[]>([]);
+  const [createToneOpen, setCreateToneOpen] = useState(false);
+  const [editingTone, setEditingTone] = useState<ToneDoc | null>(null);
+  const [togglingTone, setTogglingTone] = useState<string | null>(null);
+  const [deletingTone, setDeletingTone] = useState<string | null>(null);
+  const [openToneMenuId, setOpenToneMenuId] = useState<string | null>(null);
 
-  const mainRef = useRef<HTMLElement>(null);
-
-  // Scroll-spy
-  useEffect(() => {
-    const main = mainRef.current;
-    if (!main) return;
-    const observer = new IntersectionObserver(
-      (entries) => {
-        entries.forEach((e) => { if (e.isIntersecting) setActiveSection(e.target.id); });
-      },
-      { root: main, rootMargin: "-10% 0px -80% 0px", threshold: 0 }
-    );
-    NAV.forEach(({ id }) => {
-      const el = main.querySelector(`#${id}`);
-      if (el) observer.observe(el);
-    });
-    return () => observer.disconnect();
-  }, []);
+  function navigate(id: string) {
+    setActiveSection(id);
+    if (id !== "memory") {
+      setTimeout(() => {
+        document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
+      }, 0);
+    }
+  }
 
   useEffect(() => {
     fetch("/api/preferences").then((r) => r.json()).then((data) => {
       if (data && !data.error) {
-        setPrefs({
+        const loaded: Preferences = {
           personalInfo: { ...defaultPrefs.personalInfo, ...data.personalInfo },
           communicationStyle: { ...defaultPrefs.communicationStyle, ...data.communicationStyle },
           emailTemplates: data.emailTemplates ?? "",
           customInstructions: data.customInstructions ?? "",
-        });
+        };
+        setPrefs(loaded);
+        savedPrefs.current = loaded;
       }
     }).catch(console.error);
 
     fetch("/api/memory").then((r) => r.json()).then(setMemory).catch(console.error);
+
+    fetch("/api/tones").then((r) => r.json()).then((data) => {
+      if (Array.isArray(data)) setTones(data);
+    }).catch(console.error);
 
     fetch("/api/usage")
       .then((r) => r.json())
@@ -132,13 +139,14 @@ export default function SettingsPage() {
       .catch(() => setUsageLoading(false));
   }, []);
 
-  async function handleAutofill(section: "profile" | "communication" | "email" | "signature") {
+  async function handleAutofill(section: AutofillSection, extra?: AutofillExtra) {
     setAutofilling((s) => ({ ...s, [section]: true }));
+    setModalSection(null);
     try {
       const res = await fetch("/api/preferences/autofill", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ section }),
+        body: JSON.stringify({ section, extra }),
       });
       if (!res.ok) throw new Error();
       const data = await res.json();
@@ -170,9 +178,45 @@ export default function SettingsPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(prefs),
       });
+      if (res.ok) savedPrefs.current = prefs;
       setSaveState(res.ok ? "saved" : "error");
     } catch { setSaveState("error"); }
     setTimeout(() => setSaveState("idle"), 3000);
+  }
+
+  async function handleToneToggle(id: string, activate: boolean) {
+    setTogglingTone(id);
+    try {
+      const res = await fetch(`/api/tones/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ isActive: activate }),
+      });
+      if (res.ok) {
+        setTones((prev) =>
+          prev.map((t) => ({ ...t, isActive: activate ? t._id === id : t._id === id ? false : t.isActive }))
+        );
+      }
+    } catch { /* silently fail */ }
+    setTogglingTone(null);
+  }
+
+  async function handleToneDelete(id: string) {
+    setDeletingTone(id);
+    try {
+      await fetch(`/api/tones/${id}`, { method: "DELETE" });
+      setTones((prev) => prev.filter((t) => t._id !== id));
+    } catch { /* silently fail */ }
+    setDeletingTone(null);
+  }
+
+  function handleToneCreated(tone: ToneDoc) {
+    if (editingTone) {
+      setTones((prev) => prev.map((t) => (t._id === tone._id ? tone : t)));
+      setEditingTone(null);
+    } else {
+      setTones((prev) => [tone, ...prev]);
+    }
   }
 
   async function clearMemorySection(section: keyof Omit<Memory, "updatedAt">) {
@@ -217,11 +261,6 @@ export default function SettingsPage() {
     setTimeout(() => setPromptCopied(false), 2000);
   }
 
-  function scrollTo(id: string) {
-    const el = mainRef.current?.querySelector(`#${id}`);
-    el?.scrollIntoView({ behavior: "smooth", block: "start" });
-  }
-
   const hasMemory = memory.workContext || memory.personalContext || memory.topOfMind || memory.recentActivity;
 
   return (
@@ -240,58 +279,60 @@ export default function SettingsPage() {
           <span className="hidden sm:inline">Chat</span>
         </a>
         <span className="text-gray-200 hidden sm:inline">/</span>
-        <span className="text-sm font-semibold text-gray-800">Settings</span>
+        <span className="text-sm font-semibold text-gray-800">
+          {activeSection === "memory" ? "Memory" : "Settings"}
+        </span>
 
         <div className="ml-auto flex items-center gap-3">
-          {saveState === "saved" && (
-            <span className="text-xs text-emerald-600 font-medium flex items-center gap-1.5">
-              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-              </svg>
-              <span className="hidden sm:inline">Saved</span>
-            </span>
+          {activeSection !== "memory" && (
+            <>
+              {saveState === "saved" && (
+                <span className="text-xs text-emerald-600 font-medium flex items-center gap-1.5">
+                  <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                  </svg>
+                  <span className="hidden sm:inline">Saved</span>
+                </span>
+              )}
+              {saveState === "error" && (
+                <span className="text-xs text-red-500 font-medium hidden sm:inline">Failed to save.</span>
+              )}
+              <button
+                onClick={handleSave}
+                disabled={saveState === "saving" || JSON.stringify(prefs) === JSON.stringify(savedPrefs.current)}
+                className="px-4 py-1.5 rounded-lg bg-gray-900 hover:bg-gray-800 active:bg-gray-950 text-white text-sm font-semibold transition-colors disabled:opacity-50 cursor-pointer disabled:cursor-not-allowed"
+              >
+                {saveState === "saving" ? "Saving…" : "Save"}
+              </button>
+            </>
           )}
-          {saveState === "error" && (
-            <span className="text-xs text-red-500 font-medium hidden sm:inline">Failed to save.</span>
-          )}
-          <button
-            onClick={handleSave}
-            disabled={saveState === "saving"}
-            className="px-4 py-1.5 rounded-lg bg-gray-900 hover:bg-gray-800 active:bg-gray-950 text-white text-sm font-semibold transition-colors disabled:opacity-50 cursor-pointer disabled:cursor-not-allowed"
-          >
-            {saveState === "saving" ? "Saving…" : "Save"}
-          </button>
         </div>
       </header>
 
       {/* ── Mobile tab bar (hidden on lg) ── */}
-      {!importOpen && (
-        <div className="lg:hidden shrink-0 bg-white border-b border-gray-100 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-          <div className="flex gap-1 px-4 py-2.5 whitespace-nowrap">
-            {NAV.map((item) => (
-              <button
-                key={item.id}
-                onClick={() => scrollTo(item.id)}
-                className={`flex-none px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-colors cursor-pointer ${
-                  activeSection === item.id
-                    ? "bg-gray-900 text-white"
-                    : "bg-gray-100 text-gray-500 active:bg-gray-200"
-                }`}
-              >
-                {item.label}
-              </button>
-            ))}
-          </div>
+      <div className="lg:hidden shrink-0 bg-white border-b border-gray-100 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+        <div className="flex gap-1 px-4 py-2.5 whitespace-nowrap">
+          {NAV.map((item) => (
+            <button
+              key={item.id}
+              onClick={() => navigate(item.id)}
+              className={`flex-none px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-colors cursor-pointer ${
+                activeSection === item.id
+                  ? "bg-gray-900 text-white"
+                  : "bg-gray-100 text-gray-500 active:bg-gray-200"
+              }`}
+            >
+              {item.label}
+            </button>
+          ))}
         </div>
-      )}
+      </div>
 
       {/* ── Body ── */}
       <div className="flex flex-1 overflow-hidden">
 
-        {/* Desktop sidebar (hidden on mobile + when import open) */}
-        <aside className={`flex-col w-56 shrink-0 bg-white border-r border-gray-100 overflow-y-auto ${
-          importOpen ? "hidden" : "hidden lg:flex"
-        }`}>
+        {/* Desktop sidebar */}
+        <aside className="hidden lg:flex flex-col w-56 shrink-0 bg-white border-r border-gray-100 overflow-y-auto">
           <div className="px-4 pt-8 pb-4">
             <p className="text-[11px] font-semibold text-gray-400 uppercase tracking-widest px-3 mb-2">
               Settings
@@ -300,7 +341,7 @@ export default function SettingsPage() {
               {NAV.map((item) => (
                 <button
                   key={item.id}
-                  onClick={() => scrollTo(item.id)}
+                  onClick={() => navigate(item.id)}
                   className={`w-full text-left flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm font-medium transition-all cursor-pointer ${
                     activeSection === item.id
                       ? "bg-gray-100 text-gray-900"
@@ -315,47 +356,44 @@ export default function SettingsPage() {
           </div>
         </aside>
 
-        {/* ── Main scroll column ── */}
-        <main ref={mainRef} className="flex-1 overflow-y-auto scroll-smooth">
+        {/* ── Main content ── */}
+        <main className="flex-1 overflow-y-auto">
           <div className="max-w-2xl mx-auto px-4 sm:px-6 pt-6 sm:pt-10 pb-16 space-y-4">
 
-            {/* Page title — desktop only (mobile has header + tab bar) */}
-            <div className="hidden sm:block mb-6">
-              <h1 className="text-xl font-semibold text-gray-900">Settings</h1>
-              <p className="text-sm text-gray-400 mt-1">Personalise how the AI communicates with you and on your behalf.</p>
-            </div>
-
             {/* Profile */}
-            <Card id="profile" title="Profile" description="Your identity used to personalise AI responses."
-              action={<AutofillButton loading={!!autofilling.profile} onClick={() => handleAutofill("profile")} />}
-            >
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
-                <Field label="Full name">
-                  <input type="text" value={prefs.personalInfo.name}
-                    onChange={(e) => setPersonalInfo("name", e.target.value)}
-                    placeholder="Grega Repič" className={inp} />
-                </Field>
-                <Field label="Job title">
-                  <input type="text" value={prefs.personalInfo.jobTitle}
-                    onChange={(e) => setPersonalInfo("jobTitle", e.target.value)}
-                    placeholder="CEO" className={inp} />
-                </Field>
-                <Field label="Company">
-                  <input type="text" value={prefs.personalInfo.company}
-                    onChange={(e) => setPersonalInfo("company", e.target.value)}
-                    placeholder="Time 4 Action" className={inp} />
-                </Field>
-                <Field label="Role description">
-                  <input type="text" value={prefs.personalInfo.roleDescription}
-                    onChange={(e) => setPersonalInfo("roleDescription", e.target.value)}
-                    placeholder="I manage operations and client relations" className={inp} />
-                </Field>
-              </div>
-            </Card>
+            {activeSection !== "memory" && (
+              <Card id="profile" title="Profile" description="Your identity used to personalise AI responses."
+                action={<AutofillButton loading={!!autofilling.profile} onClick={() => setModalSection("profile")} />}
+              >
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
+                  <Field label="Full name">
+                    <input type="text" value={prefs.personalInfo.name}
+                      onChange={(e) => setPersonalInfo("name", e.target.value)}
+                      placeholder="Grega Repič" className={inp} />
+                  </Field>
+                  <Field label="Job title">
+                    <input type="text" value={prefs.personalInfo.jobTitle}
+                      onChange={(e) => setPersonalInfo("jobTitle", e.target.value)}
+                      placeholder="CEO" className={inp} />
+                  </Field>
+                  <Field label="Company">
+                    <input type="text" value={prefs.personalInfo.company}
+                      onChange={(e) => setPersonalInfo("company", e.target.value)}
+                      placeholder="Time 4 Action" className={inp} />
+                  </Field>
+                  <Field label="Role description">
+                    <input type="text" value={prefs.personalInfo.roleDescription}
+                      onChange={(e) => setPersonalInfo("roleDescription", e.target.value)}
+                      placeholder="I manage operations and client relations" className={inp} />
+                  </Field>
+                </div>
+              </Card>
+            )}
 
             {/* Communication */}
+            {activeSection !== "memory" && (
             <Card id="communication" title="Communication" description="How the AI should speak and write on your behalf."
-              action={<AutofillButton loading={!!autofilling.communication} onClick={() => handleAutofill("communication")} />}
+              action={<AutofillButton loading={!!autofilling.communication} onClick={() => setModalSection("communication")} />}
             >
               <div className="space-y-5">
                 <Field label="Tone">
@@ -377,7 +415,7 @@ export default function SettingsPage() {
                     <label className="text-xs font-medium text-gray-500">Email signature</label>
                     <AutofillButton
                       loading={!!autofilling.signature}
-                      onClick={() => handleAutofill("signature")}
+                      onClick={() => setModalSection("signature")}
                     />
                   </div>
                   <QuillEditor
@@ -387,10 +425,12 @@ export default function SettingsPage() {
                 </div>
               </div>
             </Card>
+            )}
 
             {/* Email style */}
+            {activeSection !== "memory" && (
             <Card id="email" title="Email style examples" description="Paste 1–3 of your typical emails so the AI can mirror your writing style."
-              action={<AutofillButton loading={!!autofilling.email} onClick={() => handleAutofill("email")} />}
+              action={<AutofillButton loading={!!autofilling.email} onClick={() => setModalSection("email")} />}
             >
               <textarea
                 value={prefs.emailTemplates}
@@ -400,8 +440,10 @@ export default function SettingsPage() {
                 className={`${inp} resize-none font-mono text-xs leading-relaxed`}
               />
             </Card>
+            )}
 
             {/* Custom instructions */}
+            {activeSection !== "memory" && (
             <Card id="instructions" title="Custom instructions" description="Specific rules the AI should always follow, regardless of context.">
               <textarea
                 value={prefs.customInstructions}
@@ -411,8 +453,144 @@ export default function SettingsPage() {
                 className={`${inp} resize-none`}
               />
             </Card>
+            )}
+
+            {/* Tones */}
+            {activeSection !== "memory" && (
+            <section id="tones" className="bg-white rounded-2xl border border-gray-100 overflow-hidden">
+              <div className="px-4 sm:px-6 pt-5 pb-4 border-b border-gray-100 flex items-start justify-between gap-4">
+                <div>
+                  <h2 className="text-sm font-semibold text-gray-900">Tones</h2>
+                  <p className="text-xs text-gray-400 mt-0.5">
+                    Custom writing styles the AI applies when active. Only one tone can be active at a time.
+                  </p>
+                </div>
+                <button
+                  onClick={() => setCreateToneOpen(true)}
+                  className="shrink-0 flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-gray-900 hover:bg-gray-800 active:bg-gray-950 text-white transition-colors cursor-pointer"
+                >
+                  <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
+                  </svg>
+                  New tone
+                </button>
+              </div>
+
+              <div className="px-4 sm:px-6 py-5">
+                {tones.length === 0 ? (
+                  <div className="flex flex-col items-center gap-3 py-6 text-center">
+                    <div className="w-10 h-10 rounded-xl bg-gray-100 flex items-center justify-center">
+                      <svg className="w-5 h-5 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
+                      </svg>
+                    </div>
+                    <div>
+                      <p className="text-sm font-medium text-gray-700">No tones yet</p>
+                      <p className="text-xs text-gray-400 mt-0.5">
+                        Create a tone by pasting writing examples — the AI learns your style automatically.
+                      </p>
+                    </div>
+                    <button
+                      onClick={() => setCreateToneOpen(true)}
+                      className="mt-1 px-4 py-2 rounded-xl border border-gray-200 text-xs font-semibold text-gray-600 hover:bg-gray-50 active:bg-gray-100 transition-colors cursor-pointer"
+                    >
+                      Create your first tone
+                    </button>
+                  </div>
+                ) : (
+                  <div className="space-y-2.5">
+                    {tones.map((tone) => (
+                      <div
+                        key={tone._id}
+                        className={`rounded-xl border transition-colors ${
+                          tone.isActive
+                            ? "border-gray-900 bg-gray-50"
+                            : "border-gray-100 bg-white hover:border-gray-200"
+                        }`}
+                      >
+                        <div className="px-4 py-3.5 flex items-start gap-3">
+                          {/* Active dot */}
+                          <div className={`mt-1 w-2 h-2 rounded-full shrink-0 transition-colors ${tone.isActive ? "bg-emerald-500" : "bg-gray-200"}`} />
+
+                          {/* Info */}
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className="text-sm font-semibold text-gray-900">{tone.name}</span>
+                              {tone.isActive && (
+                                <span className="px-1.5 py-0.5 rounded-md bg-emerald-50 border border-emerald-100 text-[10px] font-bold text-emerald-600 uppercase tracking-wide">
+                                  Active
+                                </span>
+                              )}
+                            </div>
+                            {tone.description && (
+                              <p className="text-xs text-gray-500 mt-0.5 leading-relaxed">{tone.description}</p>
+                            )}
+                            {tone.tags.length > 0 && (
+                              <div className="flex flex-wrap gap-1 mt-1.5">
+                                {tone.tags.map((tag) => (
+                                  <span key={tag} className="px-1.5 py-0.5 rounded-md bg-gray-100 text-[10px] font-medium text-gray-500">
+                                    {tag}
+                                  </span>
+                                ))}
+                              </div>
+                            )}
+                            {tone.characteristics && (
+                              <p className="text-xs text-gray-400 mt-1.5 leading-relaxed line-clamp-2 italic">
+                                {tone.characteristics}
+                              </p>
+                            )}
+                          </div>
+
+                          {/* Actions */}
+                          <div className="shrink-0 flex items-center gap-2.5 ml-2">
+                            {/* Toggle */}
+                            <button
+                              onClick={() => handleToneToggle(tone._id, !tone.isActive)}
+                              disabled={togglingTone === tone._id}
+                              title={tone.isActive ? "Deactivate" : "Activate"}
+                              className={`relative w-9 h-5 rounded-full transition-colors cursor-pointer disabled:opacity-50 ${
+                                tone.isActive ? "bg-gray-900" : "bg-gray-200 hover:bg-gray-300"
+                              }`}
+                            >
+                              <span
+                                className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white shadow-sm transition-transform ${
+                                  tone.isActive ? "translate-x-4" : "translate-x-0"
+                                }`}
+                              />
+                            </button>
+
+                            {/* ⋯ menu */}
+                            <div className="relative">
+                              <button
+                                onClick={() => setOpenToneMenuId(openToneMenuId === tone._id ? null : tone._id)}
+                                className="w-7 h-7 rounded-lg flex items-center justify-center text-gray-400 hover:text-gray-700 hover:bg-gray-100 active:bg-gray-200 transition-colors cursor-pointer"
+                              >
+                                <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
+                                  <circle cx="5" cy="12" r="1.5" /><circle cx="12" cy="12" r="1.5" /><circle cx="19" cy="12" r="1.5" />
+                                </svg>
+                              </button>
+
+                              {openToneMenuId === tone._id && (
+                                <ToneMenu
+                                  onEdit={() => { setEditingTone(tone); setOpenToneMenuId(null); }}
+                                  onDelete={() => { handleToneDelete(tone._id); setOpenToneMenuId(null); }}
+                                  deleting={deletingTone === tone._id}
+                                  onClose={() => setOpenToneMenuId(null)}
+                                />
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </section>
+            )}
 
             {/* Memory */}
+            {activeSection === "memory" && (
             <section id="memory" className="bg-white rounded-2xl border border-gray-100 overflow-hidden">
               <div className="px-4 sm:px-6 pt-5 pb-4 border-b border-gray-100 flex items-start justify-between gap-4">
                 <div>
@@ -553,8 +731,10 @@ export default function SettingsPage() {
                 )}
               </div>
             </section>
+            )}
 
             {/* Usage */}
+            {activeSection !== "memory" && (
             <Card id="usage" title="Usage" description="Your API usage and cost overview.">
               {usageLoading ? (
                 <div className="flex gap-3">
@@ -620,11 +800,34 @@ export default function SettingsPage() {
                 </div>
               )}
             </Card>
+            )}
 
           </div>
         </main>
       </div>
 
+      {modalSection && (
+        <AutofillModal
+          section={modalSection}
+          onClose={() => setModalSection(null)}
+          onGenerate={(extra) => handleAutofill(modalSection, extra)}
+        />
+      )}
+
+      {createToneOpen && (
+        <CreateToneModal
+          onClose={() => setCreateToneOpen(false)}
+          onCreated={handleToneCreated}
+        />
+      )}
+
+      {editingTone && (
+        <CreateToneModal
+          onClose={() => setEditingTone(null)}
+          onCreated={handleToneCreated}
+          editTone={editingTone}
+        />
+      )}
     </div>
   );
 }
@@ -658,7 +861,7 @@ function AutofillButton({ loading, onClick }: { loading: boolean; onClick: () =>
       onClick={onClick}
       disabled={loading}
       title="Autofill with AI"
-      className="shrink-0 flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium text-violet-600 bg-violet-50 hover:bg-violet-100 active:bg-violet-200 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+      className="shrink-0 flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium text-blue-600 bg-blue-50 hover:bg-blue-100 active:bg-blue-200 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
     >
       {loading ? (
         <svg className="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24">
@@ -730,6 +933,60 @@ function MemoryBlock({ title, text, onClear }: {
   );
 }
 
+function ToneMenu({ onEdit, onDelete, deleting, onClose }: {
+  onEdit: () => void;
+  onDelete: () => void;
+  deleting: boolean;
+  onClose: () => void;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    function handler(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) onClose();
+    }
+    function onKey(e: KeyboardEvent) { if (e.key === "Escape") onClose(); }
+    document.addEventListener("mousedown", handler);
+    document.addEventListener("keydown", onKey);
+    return () => { document.removeEventListener("mousedown", handler); document.removeEventListener("keydown", onKey); };
+  }, [onClose]);
+
+  return (
+    <div
+      ref={ref}
+      className="absolute right-0 top-full mt-1.5 w-36 bg-white rounded-xl shadow-xl border border-gray-100 overflow-hidden z-20 py-1"
+    >
+      <button
+        onClick={onEdit}
+        className="w-full flex items-center gap-2.5 px-3.5 py-2.5 text-sm text-gray-700 hover:bg-gray-50 active:bg-gray-100 transition-colors cursor-pointer text-left"
+      >
+        <svg className="w-3.5 h-3.5 text-gray-400 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+        </svg>
+        Edit
+      </button>
+      <div className="mx-3 border-t border-gray-50" />
+      <button
+        onClick={onDelete}
+        disabled={deleting}
+        className="w-full flex items-center gap-2.5 px-3.5 py-2.5 text-sm text-red-500 hover:bg-red-50 active:bg-red-100 transition-colors cursor-pointer text-left disabled:opacity-50"
+      >
+        {deleting ? (
+          <svg className="w-3.5 h-3.5 animate-spin shrink-0" fill="none" viewBox="0 0 24 24">
+            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" />
+            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
+          </svg>
+        ) : (
+          <svg className="w-3.5 h-3.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+          </svg>
+        )}
+        {deleting ? "Deleting…" : "Delete"}
+      </button>
+    </div>
+  );
+}
+
 function NavIcon({ id, active }: { id: string; active: boolean }) {
   const cls = `w-4 h-4 shrink-0 ${active ? "text-gray-700" : "text-gray-400"}`;
   const s = { fill: "none", viewBox: "0 0 24 24", stroke: "currentColor", strokeWidth: 1.75 } as const;
@@ -737,6 +994,7 @@ function NavIcon({ id, active }: { id: string; active: boolean }) {
   if (id === "communication") return <svg className={cls} {...s}><path strokeLinecap="round" strokeLinejoin="round" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" /></svg>;
   if (id === "email")         return <svg className={cls} {...s}><path strokeLinecap="round" strokeLinejoin="round" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" /></svg>;
   if (id === "instructions")  return <svg className={cls} {...s}><path strokeLinecap="round" strokeLinejoin="round" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" /></svg>;
+  if (id === "tones")         return <svg className={cls} {...s}><path strokeLinecap="round" strokeLinejoin="round" d="M7 21a4 4 0 01-4-4V5a2 2 0 012-2h4a2 2 0 012 2v12a4 4 0 01-4 4zm0 0h12a2 2 0 002-2v-4a2 2 0 00-2-2h-2.343M11 7.343l1.657-1.657a2 2 0 012.828 0l2.829 2.829a2 2 0 010 2.828l-8.486 8.485M7 17h.01" /></svg>;
   if (id === "memory")        return <svg className={cls} {...s}><path strokeLinecap="round" strokeLinejoin="round" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" /></svg>;
   if (id === "usage")         return <svg className={cls} {...s}><path strokeLinecap="round" strokeLinejoin="round" d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z" /></svg>;
   return null;

@@ -1,13 +1,15 @@
 "use client";
 
 import { MODEL_CONFIGS, MODEL_ORDER, ModelId } from "@/lib/models";
-import { ChevronDown, Check, Brain, Sparkles, Zap } from "lucide-react";
+import { ChevronDown, Check, Brain, Sparkles, Zap, Lock } from "lucide-react";
 import { useState, useRef, useEffect } from "react";
 import { cn } from "@/lib/utils";
 
 interface Props {
   value: ModelId;
   onChange: (model: ModelId) => void;
+  disabled?: boolean;
+  locked?: boolean; // chat in progress — show lock icon, no opacity change
 }
 
 const ICONS: Record<ModelId, React.ElementType> = {
@@ -16,7 +18,7 @@ const ICONS: Record<ModelId, React.ElementType> = {
   "claude-haiku-4-5-20251001": Zap,
 };
 
-export default function ModelSelector({ value, onChange }: Props) {
+export default function ModelSelector({ value, onChange, disabled, locked }: Props) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   const current = MODEL_CONFIGS[value];
@@ -33,21 +35,50 @@ export default function ModelSelector({ value, onChange }: Props) {
   }, [open]);
 
   return (
-    <div ref={ref} className="relative">
+    <div ref={ref} className="relative group">
       {/* Trigger button */}
       <button
-        onClick={() => setOpen(!open)}
-        className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-semibold text-slate-600 hover:bg-white hover:shadow-sm transition-all border border-transparent hover:border-slate-200"
+        onClick={() => !disabled && !locked && setOpen(!open)}
+        disabled={disabled}
+        className={cn(
+          "flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-semibold text-slate-600 transition-all border border-transparent",
+          locked
+            ? "cursor-default"
+            : disabled
+            ? "opacity-50 cursor-not-allowed"
+            : "hover:bg-white hover:shadow-sm hover:border-slate-200"
+        )}
       >
         <CurrentIcon className={cn("w-3.5 h-3.5", current.text)} />
         {current.tierName}
-        <ChevronDown
-          className={cn(
-            "w-3 h-3 text-slate-400 transition-transform duration-200",
-            open && "rotate-180"
-          )}
-        />
+        {locked ? (
+          <Lock className="w-3 h-3 text-slate-300" />
+        ) : (
+          <ChevronDown
+            className={cn(
+              "w-3 h-3 text-slate-400 transition-transform duration-200",
+              open && "rotate-180"
+            )}
+          />
+        )}
       </button>
+
+      {/* Locked tooltip */}
+      {locked && (
+        <div className="pointer-events-none absolute left-0 top-full mt-2 z-50 w-56 opacity-0 group-hover:opacity-100 transition-opacity duration-150">
+          <div className="bg-slate-800 text-white text-xs rounded-xl px-3 py-2.5 shadow-xl leading-relaxed">
+            Model can&apos;t be changed mid-chat.
+            <a
+              href="/chat"
+              className="pointer-events-auto block mt-1 text-slate-300 hover:text-white underline underline-offset-2 transition-colors"
+            >
+              Open a new chat to switch →
+            </a>
+          </div>
+          {/* Arrow */}
+          <div className="absolute -top-1 left-4 w-2 h-2 bg-slate-800 rotate-45" />
+        </div>
+      )}
 
       {/* Dropdown */}
       {open && (

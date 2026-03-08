@@ -44,7 +44,16 @@ export default async function ConversationPage({
     id: m._id.toString(),
     role: m.role as "user" | "assistant",
     content: m.content,
-    parts: [{ type: "text" as const, text: m.content }],
+    parts: [
+      // File parts first (images with data URL, docs with metadata only)
+      ...(m.files ?? []).map((f: any) => ({
+        type: "file" as const,
+        mediaType: f.mediaType,
+        filename: f.filename,
+        url: f.url, // empty string for non-images — MessageBubble handles that
+      })),
+      { type: "text" as const, text: m.content },
+    ],
   }));
 
   return (

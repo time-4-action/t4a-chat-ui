@@ -4,6 +4,7 @@ import { Conversation } from "@/models/conversation";
 import { UserUsage } from "@/models/user-usage";
 import { UserPreference } from "@/models/user-preference";
 import { UserMemory } from "@/models/user-memory";
+import { UserTone } from "@/models/user-tone";
 import { createAnthropic } from "@ai-sdk/anthropic";
 import { createMCPClient } from "@ai-sdk/mcp";
 import { streamText, generateText, stepCountIs, convertToModelMessages, UIMessage } from "ai";
@@ -82,7 +83,7 @@ Answer in maximum 2-3 short sentences or a brief bullet list (max 4 bullets). Le
 `,
 };
 
-async function buildSystemPrompt(userId: string): Promise<string> {
+async function buildSystemPrompt(userId: string, toneId?: string): Promise<string> {
   const prefs = await UserPreference.findOne({ userId });
 
   const lines: string[] = [];
@@ -133,6 +134,18 @@ async function buildSystemPrompt(userId: string): Promise<string> {
     lines.push("\n\n--- MEMORY ---");
     lines.push("What you know about this user from past conversations:");
     memorySections.forEach((s) => lines.push(`\n${s}`));
+  }
+
+  const activeTone = toneId
+    ? await UserTone.findOne({ _id: toneId, userId })
+    : await UserTone.findOne({ userId, isActive: true });
+  if (activeTone?.generatedPrompt) {
+    lines.push("\n\n--- ACTIVE TONE ---");
+    lines.push(`The user has activated a custom writing tone called "${activeTone.name}". Apply this tone to all your responses.`);
+    if (activeTone.characteristics) {
+      lines.push(`Style characteristics: ${activeTone.characteristics}`);
+    }
+    lines.push(`\nTone instructions:\n${activeTone.generatedPrompt}`);
   }
 
   return BASE_SYSTEM_PROMPT + lines.join("\n");
@@ -240,61 +253,99 @@ export async function POST(req: NextRequest) {
   const session = await auth0.getSession();
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const { messages: uiMessages, conversationId, mode, model: requestedModel } = await req.json() as {
+  const { messages: uiMessages, conversationId, mode, model: requestedModel, toneId } = await req.json() as {
     messages: UIMessage[];
     conversationId?: string;
     mode?: string;
     model?: string;
+    toneId?: string;
   };
 
   const modelId: ModelId = (requestedModel as ModelId) ?? DEFAULT_MODEL;
 
   const messages = withCacheControl(await convertToModelMessages(uiMessages));
 
-  // Extract last user message text for MongoDB save
+  // Extract last user message text + files for MongoDB save
   const lastUserMsg = [...uiMessages].reverse().find((m) => m.role === "user");
   const lastUserText = lastUserMsg?.parts
     ?.filter((p) => p.type === "text")
     .map((p) => (p as { type: "text"; text: string }).text)
     .join("") ?? "";
 
+  const lastUserFiles = (lastUserMsg?.parts ?? [])
+    .filter((p) => p.type === "file")
+    .map((p) => {
+      const fp = p as { type: "file"; mediaType: string; filename?: string; url: string };
+      return {
+        mediaType: fp.mediaType,
+        filename: fp.filename ?? "",
+        // Only store data URL for images — PDFs/docs can be huge base64 blobs
+        url: fp.mediaType.startsWith("image/") ? fp.url : "",
+      };
+    });
+
   await connectDB();
-  const basePrompt = await buildSystemPrompt(session.user.sub);
+  const basePrompt = await buildSystemPrompt(session.user.sub, toneId);
   const systemPrompt = mode && MODE_PROMPTS[mode]
     ? MODE_PROMPTS[mode] + basePrompt
     : basePrompt;
 
-  const mcpClient = await createMCPClient({
-    transport: {
-      type: "sse",
-      url: process.env.MCP_SERVER_URL!,
-    },
-  });
+  let mcpClient: Awaited<ReturnType<typeof createMCPClient>> | null = null;
+  let mcpTools: Record<string, unknown> = {};
 
-  const mcpTools = await mcpClient.tools();
+  if (process.env.MCP_SERVER_URL) {
+    try {
+      mcpClient = await createMCPClient({
+        transport: { type: "sse", url: process.env.MCP_SERVER_URL },
+      });
+      mcpTools = await mcpClient.tools();
+    } catch (err) {
+      console.warn("[chat] MCP unavailable, continuing without tools:", (err as Error).message);
+      mcpClient = null;
+      mcpTools = {};
+    }
+  }
 
   const result = streamText({
     model: anthropic(modelId),
     system: systemPrompt,
     messages,
     stopWhen: stepCountIs(5),
-    tools: mcpTools,
-    onFinish: async ({ text, usage, providerMetadata }) => {
+    ...(Object.keys(mcpTools).length > 0 && { tools: mcpTools }),
+    onFinish: async ({ text, usage, steps }) => {
       console.log("[chat] usage:", JSON.stringify(usage));
-      await mcpClient.close();
+      await mcpClient?.close();
 
+      // Memory update — only when there's actual text exchange
       if (text && lastUserText) {
         updateMemorySummary(session.user.sub, lastUserText, text).catch(console.error);
       }
 
-      if (conversationId && text && lastUserText) {
+      if (conversationId && text) {
         await connectDB();
         const isFirst = uiMessages.filter((m) => m.role === "user").length === 1;
-        const inputTokens        = (usage as any)?.inputTokens  ?? (usage as any)?.promptTokens     ?? 0;
-        const outputTokens       = (usage as any)?.outputTokens ?? (usage as any)?.completionTokens ?? 0;
-        const cacheReadTokens    = (providerMetadata as any)?.anthropic?.cacheReadInputTokens      ?? 0;
-        const cacheCreationTokens = (providerMetadata as any)?.anthropic?.cacheCreationInputTokens ?? 0;
+
+        // usage.inputTokens / outputTokens are the total across all steps in v6
+        const inputTokens  = usage.inputTokens  ?? 0;
+        const outputTokens = usage.outputTokens ?? 0;
+
+        // Cache tokens live in per-step providerMetadata — sum across all steps
+        let cacheReadTokens = 0;
+        let cacheCreationTokens = 0;
+        for (const step of steps) {
+          const meta = (step.providerMetadata as any)?.anthropic;
+          cacheReadTokens     += meta?.cacheReadInputTokens     ?? 0;
+          cacheCreationTokens += meta?.cacheCreationInputTokens ?? 0;
+        }
+
+        console.log("[chat] tokens — input:", inputTokens, "output:", outputTokens, "cacheRead:", cacheReadTokens, "cacheCreate:", cacheCreationTokens);
+
         const reqCost = calculateRequestCost(modelId, inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens);
+
+        // Conversation title: prefer user text, fall back to first attached filename
+        const firstFileName = lastUserFiles[0]?.filename;
+        const titleSource = lastUserText || (firstFileName ? `[File] ${firstFileName}` : "New Chat");
+
         await UserUsage.findOneAndUpdate(
           { userId: session.user.sub, modelId },
           { $inc: { totalCostUsd: reqCost, conversationCount: isFirst ? 1 : 0, inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens } },
@@ -304,7 +355,7 @@ export async function POST(req: NextRequest) {
           $push: {
             messages: {
               $each: [
-                { role: "user", content: lastUserText },
+                { role: "user", content: lastUserText, files: lastUserFiles },
                 { role: "assistant", content: text },
               ],
             },
@@ -313,7 +364,7 @@ export async function POST(req: NextRequest) {
           $set: {
             updatedAt: new Date(),
             model: modelId,
-            ...(isFirst && { title: lastUserText.slice(0, 60) }),
+            ...(isFirst && { title: titleSource.slice(0, 60) }),
           },
         });
       }
