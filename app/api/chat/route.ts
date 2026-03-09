@@ -295,8 +295,15 @@ export async function POST(req: NextRequest) {
 
   if (process.env.MCP_SERVER_URL) {
     try {
+      const accessToken = session.tokenSet?.accessToken;
       mcpClient = await createMCPClient({
-        transport: { type: "sse", url: process.env.MCP_SERVER_URL },
+        transport: {
+          type: "sse",
+          url: process.env.MCP_SERVER_URL,
+          headers: accessToken
+            ? { Authorization: `Bearer ${accessToken}` }
+            : undefined,
+        },
       });
       mcpTools = await mcpClient.tools();
     } catch (err) {
@@ -306,70 +313,99 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  const result = streamText({
-    model: anthropic(modelId),
-    system: systemPrompt,
-    messages,
-    stopWhen: stepCountIs(5),
-    ...(Object.keys(mcpTools).length > 0 && { tools: mcpTools }),
-    onFinish: async ({ text, usage, steps }) => {
-      console.log("[chat] usage:", JSON.stringify(usage));
-      await mcpClient?.close();
+  try {
+    const result = streamText({
+      model: anthropic(modelId),
+      system: systemPrompt,
+      messages,
+      stopWhen: stepCountIs(5),
+      ...(Object.keys(mcpTools).length > 0 && { tools: mcpTools }),
+      onFinish: async ({ text, usage, steps }) => {
+        console.log("[chat] usage:", JSON.stringify(usage));
+        await mcpClient?.close();
 
-      // Memory update — only when there's actual text exchange
-      if (text && lastUserText) {
-        updateMemorySummary(session.user.sub, lastUserText, text).catch(console.error);
-      }
-
-      if (conversationId && text) {
-        await connectDB();
-        const isFirst = uiMessages.filter((m) => m.role === "user").length === 1;
-
-        // usage.inputTokens / outputTokens are the total across all steps in v6
-        const inputTokens  = usage.inputTokens  ?? 0;
-        const outputTokens = usage.outputTokens ?? 0;
-
-        // Cache tokens live in per-step providerMetadata — sum across all steps
-        let cacheReadTokens = 0;
-        let cacheCreationTokens = 0;
-        for (const step of steps) {
-          const meta = (step.providerMetadata as any)?.anthropic;
-          cacheReadTokens     += meta?.cacheReadInputTokens     ?? 0;
-          cacheCreationTokens += meta?.cacheCreationInputTokens ?? 0;
+        // Memory update — only when there's actual text exchange
+        if (text && lastUserText) {
+          updateMemorySummary(session.user.sub, lastUserText, text).catch(console.error);
         }
 
-        console.log("[chat] tokens — input:", inputTokens, "output:", outputTokens, "cacheRead:", cacheReadTokens, "cacheCreate:", cacheCreationTokens);
+        if (conversationId && text) {
+          await connectDB();
+          const isFirst = uiMessages.filter((m) => m.role === "user").length === 1;
 
-        const reqCost = calculateRequestCost(modelId, inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens);
+          // usage.inputTokens / outputTokens are the total across all steps in v6
+          const inputTokens  = usage.inputTokens  ?? 0;
+          const outputTokens = usage.outputTokens ?? 0;
 
-        // Conversation title: prefer user text, fall back to first attached filename
-        const firstFileName = lastUserFiles[0]?.filename;
-        const titleSource = lastUserText || (firstFileName ? `[File] ${firstFileName}` : "New Chat");
+          // Cache tokens live in per-step providerMetadata — sum across all steps
+          let cacheReadTokens = 0;
+          let cacheCreationTokens = 0;
+          for (const step of steps) {
+            const meta = (step.providerMetadata as any)?.anthropic;
+            cacheReadTokens     += meta?.cacheReadInputTokens     ?? 0;
+            cacheCreationTokens += meta?.cacheCreationInputTokens ?? 0;
+          }
 
-        await UserUsage.findOneAndUpdate(
-          { userId: session.user.sub, modelId },
-          { $inc: { totalCostUsd: reqCost, conversationCount: isFirst ? 1 : 0, inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens } },
-          { upsert: true }
-        );
-        await Conversation.findByIdAndUpdate(conversationId, {
-          $push: {
-            messages: {
-              $each: [
-                { role: "user", content: lastUserText, files: lastUserFiles },
-                { role: "assistant", content: text },
-              ],
+          console.log("[chat] tokens — input:", inputTokens, "output:", outputTokens, "cacheRead:", cacheReadTokens, "cacheCreate:", cacheCreationTokens);
+
+          const reqCost = calculateRequestCost(modelId, inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens);
+
+          // Conversation title: prefer user text, fall back to first attached filename
+          const firstFileName = lastUserFiles[0]?.filename;
+          const titleSource = lastUserText || (firstFileName ? `[File] ${firstFileName}` : "New Chat");
+
+          await UserUsage.findOneAndUpdate(
+            { userId: session.user.sub, modelId },
+            { $inc: { totalCostUsd: reqCost, conversationCount: isFirst ? 1 : 0, inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens } },
+            { upsert: true }
+          );
+          await Conversation.findByIdAndUpdate(conversationId, {
+            $push: {
+              messages: {
+                $each: [
+                  { role: "user", content: lastUserText, files: lastUserFiles },
+                  { role: "assistant", content: text },
+                ],
+              },
             },
-          },
-          $inc: { totalCostUsd: reqCost },
-          $set: {
-            updatedAt: new Date(),
-            model: modelId,
-            ...(isFirst && { title: titleSource.slice(0, 60) }),
-          },
-        });
-      }
-    },
-  });
+            $inc: { totalCostUsd: reqCost },
+            $set: {
+              updatedAt: new Date(),
+              model: modelId,
+              ...(isFirst && { title: titleSource.slice(0, 60) }),
+            },
+          });
+        }
+      },
+    });
 
-  return result.toUIMessageStreamResponse();
+    return result.toUIMessageStreamResponse();
+  } catch (err: any) {
+    await mcpClient?.close();
+
+    const lastErr = err?.lastError ?? err;
+    const statusCode: number = lastErr?.statusCode ?? 500;
+    const isRateLimit = statusCode === 429;
+    const retryAfter: number | undefined = lastErr?.responseHeaders?.["retry-after"]
+      ? parseInt(lastErr.responseHeaders["retry-after"], 10)
+      : undefined;
+
+    // Extract clean message from the API error body
+    let message = lastErr?.message ?? err?.message ?? "An unexpected error occurred.";
+    try {
+      const body = JSON.parse(lastErr?.responseBody ?? "{}");
+      if (body?.error?.message) message = body.error.message;
+    } catch { /* ignore */ }
+
+    console.error("[chat] error:", statusCode, message);
+
+    return NextResponse.json(
+      {
+        error: isRateLimit ? "rate_limit" : "api_error",
+        message,
+        ...(retryAfter !== undefined && { retryAfter }),
+      },
+      { status: isRateLimit ? 429 : 500 }
+    );
+  }
 }

@@ -10,7 +10,7 @@ import ChatModeSelector, { ChatMode } from "./chat-mode-selector";
 import ModelSelector from "./model-selector";
 import ToneSelector from "./tone-selector";
 import type { ToneDoc } from "./create-tone-modal";
-import { ArrowUp, DollarSign, Paperclip, Square, X, AlertCircle } from "lucide-react";
+import { ArrowUp, DollarSign, Paperclip, Square, X, AlertCircle, Clock, Wifi, RefreshCw } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { DEFAULT_MODEL, ModelId, formatCost } from "@/lib/models";
 
@@ -140,6 +140,137 @@ function FileChip({ attached, onRemove }: { attached: AttachedFile; onRemove: ()
     : <DocumentChip attached={attached} onRemove={onRemove} />;
 }
 
+// ─── Chat error banner ─────────────────────────────────────────────────────
+
+interface ChatErrorInfo {
+  type: "rate_limit" | "api_error" | "network";
+  message: string;
+  retryAfter?: number;
+}
+
+function ChatErrorBanner({ error, onDismiss, onRetry }: { error: ChatErrorInfo; onDismiss: () => void; onRetry?: () => void }) {
+  const [secondsLeft, setSecondsLeft] = useState<number | null>(
+    error.retryAfter != null ? error.retryAfter : null
+  );
+
+  useEffect(() => {
+    if (secondsLeft === null || secondsLeft <= 0) return;
+    const id = setInterval(() => setSecondsLeft((s) => (s !== null && s > 1 ? s - 1 : 0)), 1000);
+    return () => clearInterval(id);
+  }, [secondsLeft]);
+
+  const isRateLimit = error.type === "rate_limit";
+
+  function formatSeconds(s: number): string {
+    if (s <= 0) return "0s";
+    const m = Math.floor(s / 60);
+    const sec = s % 60;
+    return m > 0 ? `${m}m ${sec}s` : `${sec}s`;
+  }
+
+  // Derive a user-friendly short message
+  const friendlyTitle = isRateLimit
+    ? "Rate limit reached"
+    : error.type === "network"
+    ? "Connection error"
+    : "Request failed";
+
+  const friendlyBody = isRateLimit
+    ? "You've used your token quota for this minute."
+    : error.message.length > 160
+    ? error.message.slice(0, 157) + "…"
+    : error.message;
+
+  const canRetry = !isRateLimit || (secondsLeft !== null && secondsLeft <= 0);
+
+  return (
+    <div
+      className={cn(
+        "flex items-start gap-3 rounded-2xl border px-4 py-3.5 shadow-md",
+        isRateLimit
+          ? "bg-amber-50 border-amber-200"
+          : error.type === "network"
+          ? "bg-slate-50 border-slate-200"
+          : "bg-red-50 border-red-200"
+      )}
+    >
+      {/* Icon */}
+      <div
+        className={cn(
+          "mt-0.5 shrink-0 h-8 w-8 rounded-xl flex items-center justify-center",
+          isRateLimit ? "bg-amber-100" : error.type === "network" ? "bg-slate-100" : "bg-red-100"
+        )}
+      >
+        {isRateLimit ? (
+          <Clock className="h-4 w-4 text-amber-600" />
+        ) : error.type === "network" ? (
+          <Wifi className="h-4 w-4 text-slate-500" />
+        ) : (
+          <AlertCircle className="h-4 w-4 text-red-500" />
+        )}
+      </div>
+
+      {/* Content */}
+      <div className="flex-1 min-w-0">
+        <p className={cn("text-sm font-semibold leading-snug",
+          isRateLimit ? "text-amber-800" : error.type === "network" ? "text-slate-700" : "text-red-700"
+        )}>
+          {friendlyTitle}
+        </p>
+        <p className={cn("text-xs mt-0.5 leading-relaxed",
+          isRateLimit ? "text-amber-700" : error.type === "network" ? "text-slate-500" : "text-red-500"
+        )}>
+          {friendlyBody}
+        </p>
+
+        {/* Countdown or retry */}
+        <div className="mt-2 flex items-center gap-2">
+          {isRateLimit && secondsLeft !== null && secondsLeft > 0 && (
+            <span className="inline-flex items-center gap-1.5 text-[11px] font-medium text-amber-700 bg-amber-100 border border-amber-200 px-2 py-0.5 rounded-full">
+              <Clock className="h-3 w-3" />
+              Try again in {formatSeconds(secondsLeft)}
+            </span>
+          )}
+          {onRetry && canRetry && (
+            <button
+              type="button"
+              onClick={onRetry}
+              className={cn(
+                "inline-flex items-center gap-1.5 text-[11px] font-semibold px-2.5 py-1 rounded-full border transition-colors",
+                isRateLimit
+                  ? "bg-amber-600 text-white border-amber-600 hover:bg-amber-700"
+                  : error.type === "network"
+                  ? "bg-slate-700 text-white border-slate-700 hover:bg-slate-800"
+                  : "bg-red-600 text-white border-red-600 hover:bg-red-700"
+              )}
+            >
+              <RefreshCw className="h-3 w-3" />
+              Retry
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* Dismiss */}
+      <button
+        type="button"
+        onClick={onDismiss}
+        className={cn(
+          "shrink-0 h-6 w-6 rounded-lg flex items-center justify-center transition-colors",
+          isRateLimit
+            ? "text-amber-400 hover:text-amber-600 hover:bg-amber-100"
+            : error.type === "network"
+            ? "text-slate-400 hover:text-slate-600 hover:bg-slate-100"
+            : "text-red-300 hover:text-red-500 hover:bg-red-100"
+        )}
+        aria-label="Dismiss error"
+      >
+        <X className="h-3.5 w-3.5" />
+      </button>
+    </div>
+  );
+}
+
 // ─── Main component ────────────────────────────────────────────────────────
 
 export default function ChatWindow({
@@ -158,6 +289,7 @@ export default function ChatWindow({
   const [attachedFiles, setAttachedFiles] = useState<AttachedFile[]>([]);
   const [fileWarning, setFileWarning] = useState<string | null>(null);
   const [isDragging, setIsDragging] = useState(false);
+  const [chatError, setChatError] = useState<{ type: "rate_limit" | "api_error" | "network"; message: string; retryAfter?: number } | null>(null);
 
   useEffect(() => {
     fetch("/api/preferences")
@@ -216,10 +348,24 @@ export default function ChatWindow({
     window.history.replaceState(null, "", `/chat/${conv._id}`);
   }, []);
 
-  const { messages, sendMessage, status, stop } = useChat({
+  const { messages, sendMessage, status, stop, error: chatErrorRaw } = useChat({
     transport,
     messages: initialMessages,
   });
+
+  // Parse structured error from server response
+  useEffect(() => {
+    if (!chatErrorRaw) { setChatError(null); return; }
+    try {
+      const parsed = JSON.parse(chatErrorRaw.message);
+      if (parsed?.error) {
+        setChatError({ type: parsed.error, message: parsed.message, retryAfter: parsed.retryAfter });
+        return;
+      }
+    } catch { /* not JSON */ }
+    // Generic network / unknown error
+    setChatError({ type: "network", message: chatErrorRaw.message ?? "Something went wrong." });
+  }, [chatErrorRaw]);
 
   const isLoading = status === "submitted" || status === "streaming";
   const isEmpty = messages.length === 0 && !isLoading;
@@ -580,6 +726,12 @@ export default function ChatWindow({
             <MessageBubble key={m.id} message={m} signatureHtml={signatureHtml} />
           ))}
           {isLoading && <ToolCallIndicator />}
+          {chatError && !isLoading && (
+            <ChatErrorBanner
+              error={chatError}
+              onDismiss={() => setChatError(null)}
+            />
+          )}
           <div ref={bottomRef} />
         </div>
       </div>
