@@ -1,4 +1,13 @@
-export default function ToolCallIndicator() {
+import { getCategoryForTool } from "@/lib/capabilities";
+
+interface Props {
+  toolName?: string;
+}
+
+export default function ToolCallIndicator({ toolName }: Props) {
+  const category = toolName ? getCategoryForTool(toolName) : undefined;
+  const label = category ? `${category.label} lookup…` : "Accessing company data…";
+
   return (
     <div className="flex gap-3 items-start">
       <img src="/favicon.ico" alt="logo" className="hidden sm:block w-7 h-7 object-contain rounded-md shrink-0 mt-0.5" />
@@ -9,7 +18,7 @@ export default function ToolCallIndicator() {
             <span className="w-1.5 h-1.5 rounded-full bg-slate-300 animate-bounce" style={{ animationDelay: "150ms" }} />
             <span className="w-1.5 h-1.5 rounded-full bg-slate-300 animate-bounce" style={{ animationDelay: "300ms" }} />
           </span>
-          <span>Accessing company data…</span>
+          <span>{label}</span>
         </div>
       </div>
     </div>

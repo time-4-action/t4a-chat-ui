@@ -84,6 +84,11 @@ Answer in maximum 2-3 short sentences or a brief bullet list (max 4 bullets). Le
 };
 
 async function buildSystemPrompt(userId: string, toneId?: string): Promise<string> {
+  const now = new Date();
+  const dateStr = now.toLocaleDateString("en-US", { weekday: "long", year: "numeric", month: "long", day: "numeric" });
+  const timeStr = now.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", timeZoneName: "short" });
+  const dateContext = `\n\nCurrent date and time: ${dateStr}, ${timeStr}`;
+
   const prefs = await UserPreference.findOne({ userId });
 
   const lines: string[] = [];
@@ -148,7 +153,7 @@ async function buildSystemPrompt(userId: string, toneId?: string): Promise<strin
     lines.push(`\nTone instructions:\n${activeTone.generatedPrompt}`);
   }
 
-  return BASE_SYSTEM_PROMPT + lines.join("\n");
+  return BASE_SYSTEM_PROMPT + dateContext + lines.join("\n");
 }
 
 interface MemorySummary {
@@ -222,6 +227,48 @@ Return ONLY valid JSON with these exact keys:
   );
 }
 
+// Truncate oversized tool results so large MCP payloads don't bloat every turn.
+const MAX_TOOL_RESULT_CHARS = 6000;
+
+function truncateToolResults(messages: any[]): any[] {
+  return messages.map((msg) => {
+    if (!Array.isArray(msg.content)) return msg;
+    const newContent = msg.content.map((block: any) => {
+      if (block.type !== "tool-result" && block.type !== "tool_result") return block;
+      const content = block.content;
+      if (typeof content === "string" && content.length > MAX_TOOL_RESULT_CHARS) {
+        return { ...block, content: content.slice(0, MAX_TOOL_RESULT_CHARS) + "\n[...truncated for context length]" };
+      }
+      if (Array.isArray(content)) {
+        return {
+          ...block,
+          content: content.map((c: any) => {
+            if (c.type === "text" && typeof c.text === "string" && c.text.length > MAX_TOOL_RESULT_CHARS) {
+              return { ...c, text: c.text.slice(0, MAX_TOOL_RESULT_CHARS) + "\n[...truncated for context length]" };
+            }
+            return c;
+          }),
+        };
+      }
+      return block;
+    });
+    return { ...msg, content: newContent };
+  });
+}
+
+// Keep only the last N messages to bound context growth.
+// Starts the window on a user message so we never begin mid-turn.
+const MAX_HISTORY_MESSAGES = 20;
+
+function applyMessageWindow(messages: any[]): any[] {
+  if (messages.length <= MAX_HISTORY_MESSAGES) return messages;
+  let sliced = messages.slice(messages.length - MAX_HISTORY_MESSAGES);
+  // Always start on a user message — never cut into an assistant turn mid-way
+  const firstUserIdx = sliced.findIndex((m: any) => m.role === "user");
+  if (firstUserIdx > 0) sliced = sliced.slice(firstUserIdx);
+  return sliced;
+}
+
 // Mark the last message's last content block with Anthropic cache_control.
 // This caches the full prefix (tools + system + all prior messages) so subsequent
 // turns pay only 10% of input price for already-seen tokens.
@@ -263,7 +310,8 @@ export async function POST(req: NextRequest) {
 
   const modelId: ModelId = (requestedModel as ModelId) ?? DEFAULT_MODEL;
 
-  const messages = withCacheControl(await convertToModelMessages(uiMessages));
+  const rawMessages = await convertToModelMessages(uiMessages);
+  const messages = withCacheControl(applyMessageWindow(truncateToolResults(rawMessages)));
 
   // Extract last user message text + files for MongoDB save
   const lastUserMsg = [...uiMessages].reverse().find((m) => m.role === "user");
@@ -320,8 +368,8 @@ export async function POST(req: NextRequest) {
       messages,
       stopWhen: stepCountIs(5),
       ...(Object.keys(mcpTools).length > 0 && { tools: mcpTools }),
-      onFinish: async ({ text, usage, steps }) => {
-        console.log("[chat] usage:", JSON.stringify(usage));
+      onFinish: async ({ text, totalUsage }) => {
+        console.log("[chat] totalUsage:", JSON.stringify(totalUsage));
         await mcpClient?.close();
 
         // Memory update — only when there's actual text exchange
@@ -333,22 +381,17 @@ export async function POST(req: NextRequest) {
           await connectDB();
           const isFirst = uiMessages.filter((m) => m.role === "user").length === 1;
 
-          // usage.inputTokens / outputTokens are the total across all steps in v6
-          const inputTokens  = usage.inputTokens  ?? 0;
-          const outputTokens = usage.outputTokens ?? 0;
+          // totalUsage aggregates across all steps (tool call rounds).
+          // inputTokens = total (noCache + cacheRead + cacheWrite).
+          // inputTokenDetails breaks it down so we can price each bucket correctly.
+          const noCacheInputTokens = totalUsage.inputTokenDetails?.noCacheTokens   ?? 0;
+          const cacheReadTokens    = totalUsage.inputTokenDetails?.cacheReadTokens  ?? 0;
+          const cacheWriteTokens   = totalUsage.inputTokenDetails?.cacheWriteTokens ?? 0;
+          const outputTokens       = totalUsage.outputTokens ?? 0;
 
-          // Cache tokens live in per-step providerMetadata — sum across all steps
-          let cacheReadTokens = 0;
-          let cacheCreationTokens = 0;
-          for (const step of steps) {
-            const meta = (step.providerMetadata as any)?.anthropic;
-            cacheReadTokens     += meta?.cacheReadInputTokens     ?? 0;
-            cacheCreationTokens += meta?.cacheCreationInputTokens ?? 0;
-          }
+          console.log("[chat] tokens — noCache:", noCacheInputTokens, "cacheRead:", cacheReadTokens, "cacheWrite:", cacheWriteTokens, "output:", outputTokens);
 
-          console.log("[chat] tokens — input:", inputTokens, "output:", outputTokens, "cacheRead:", cacheReadTokens, "cacheCreate:", cacheCreationTokens);
-
-          const reqCost = calculateRequestCost(modelId, inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens);
+          const reqCost = calculateRequestCost(modelId, noCacheInputTokens, outputTokens, cacheReadTokens, cacheWriteTokens);
 
           // Conversation title: prefer user text, fall back to first attached filename
           const firstFileName = lastUserFiles[0]?.filename;
@@ -356,7 +399,7 @@ export async function POST(req: NextRequest) {
 
           await UserUsage.findOneAndUpdate(
             { userId: session.user.sub, modelId },
-            { $inc: { totalCostUsd: reqCost, conversationCount: isFirst ? 1 : 0, inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens } },
+            { $inc: { totalCostUsd: reqCost, conversationCount: isFirst ? 1 : 0, inputTokens: noCacheInputTokens, outputTokens, cacheReadTokens, cacheCreationTokens: cacheWriteTokens } },
             { upsert: true }
           );
           await Conversation.findByIdAndUpdate(conversationId, {

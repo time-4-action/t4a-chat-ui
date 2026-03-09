@@ -5,6 +5,7 @@ import { DefaultChatTransport, UIMessage, FileUIPart } from "ai";
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import MessageBubble from "./message-bubble";
 import ToolCallIndicator from "./tool-call-indicator";
+import { CAPABILITIES } from "@/lib/capabilities";
 import VoiceMode from "./voice-mode";
 import ChatModeSelector, { ChatMode } from "./chat-mode-selector";
 import ModelSelector from "./model-selector";
@@ -291,6 +292,16 @@ export default function ChatWindow({
   const [isDragging, setIsDragging] = useState(false);
   const [chatError, setChatError] = useState<{ type: "rate_limit" | "api_error" | "network"; message: string; retryAfter?: number } | null>(null);
 
+  // Pick up prompt pre-filled from sidebar capability panel
+  useEffect(() => {
+    const pending = sessionStorage.getItem("pendingPrompt");
+    if (pending) {
+      sessionStorage.removeItem("pendingPrompt");
+      setInput(pending);
+      setTimeout(() => inputRef.current?.focus(), 50);
+    }
+  }, []);
+
   useEffect(() => {
     fetch("/api/preferences")
       .then((r) => r.json())
@@ -545,6 +556,20 @@ export default function ChatWindow({
 
   // ── UI ─────────────────────────────────────────────────────────────────
 
+  function handlePromptSelect(prompt: string) {
+    setInput(prompt);
+    setTimeout(() => inputRef.current?.focus(), 50);
+  }
+
+  const activeToolName = useMemo(() => {
+    if (!isLoading) return undefined;
+    const lastMsg = [...messages].reverse().find((m) => m.role === "assistant");
+    if (!lastMsg) return undefined;
+    const toolPart = (lastMsg.parts as Array<{ type: string; toolName?: string }>)
+      .find((p) => p.type === "tool-call");
+    return toolPart?.toolName;
+  }, [messages, isLoading]);
+
   const hasFiles = attachedFiles.length > 0;
   const canSend = (input.trim() || hasFiles) && !isLoading;
 
@@ -706,10 +731,25 @@ export default function ChatWindow({
       <div className="flex-1 flex flex-col items-center justify-center px-4">
         <div className="w-full max-w-3xl">
           <div className="text-center mb-8">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
             <img src="/favicon.ico" alt="logo" className="w-14 h-14 object-contain mx-auto mb-4" />
             <h2 className="text-slate-800 font-semibold text-2xl">How can I help you?</h2>
-            <p className="text-slate-400 text-sm mt-1.5">Ask about products, orders, or customer data.</p>
+            <p className="text-slate-400 text-sm mt-1.5">Ask about products, orders, partners, warehouse or delivery.</p>
           </div>
+
+          {/* Suggestion chips */}
+          <div className="flex flex-wrap justify-center gap-2 mb-6">
+            {CAPABILITIES.flatMap((cap) => cap.prompts.slice(0, 1)).map((prompt) => (
+              <button
+                key={prompt}
+                onClick={() => handlePromptSelect(prompt)}
+                className="text-xs text-slate-600 border border-slate-200 rounded-full px-3.5 py-1.5 hover:bg-slate-100 hover:border-slate-300 transition-colors"
+              >
+                {prompt}
+              </button>
+            ))}
+          </div>
+
           {inputBox}
           <p className="text-center text-[11px] text-slate-400 mt-2">
             Shift+Enter for new line · Enter to send · Drag & drop files
@@ -725,7 +765,7 @@ export default function ChatWindow({
           {messages.map((m) => (
             <MessageBubble key={m.id} message={m} signatureHtml={signatureHtml} />
           ))}
-          {isLoading && <ToolCallIndicator />}
+          {isLoading && <ToolCallIndicator toolName={activeToolName} />}
           {chatError && !isLoading && (
             <ChatErrorBanner
               error={chatError}

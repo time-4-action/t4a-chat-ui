@@ -51,21 +51,21 @@ export const MODEL_ORDER: ModelId[] = [
   "claude-haiku-4-5-20251001",
 ];
 
-export const DEFAULT_MODEL: ModelId = "claude-sonnet-4-6";
+export const DEFAULT_MODEL: ModelId = "claude-haiku-4-5-20251001";
 
 export function calculateRequestCost(
   modelId: ModelId,
-  inputTokens: number,
+  noCacheInputTokens: number,   // non-cached input tokens only (excludes cache reads/writes)
   outputTokens: number,
   cacheReadTokens = 0,
-  cacheCreationTokens = 0,
+  cacheWriteTokens = 0,
 ): number {
   const { inputPrice, outputPrice } = MODEL_CONFIGS[modelId];
   return (
-    inputTokens       * inputPrice         +
-    outputTokens      * outputPrice        +
-    cacheReadTokens   * inputPrice * 0.1   +  // cache reads = 10% of input price
-    cacheCreationTokens * inputPrice * 1.25    // cache writes = 125% of input price
+    noCacheInputTokens  * inputPrice         +   // standard input price for uncached tokens
+    outputTokens        * outputPrice        +
+    cacheReadTokens     * inputPrice * 0.1   +   // cache reads  = 10%  of input price
+    cacheWriteTokens    * inputPrice * 1.25       // cache writes = 125% of input price (5-min ephemeral)
   ) / 1_000_000;
 }
 

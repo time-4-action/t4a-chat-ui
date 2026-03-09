@@ -15,6 +15,7 @@ import {
   Trash2,
   Lightbulb,
   Settings,
+  Zap,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useUser } from "@auth0/nextjs-auth0/client";
@@ -295,6 +296,24 @@ export default function ConversationSidebar({ open, onToggle, mobileClose }: Pro
         >
           <Settings className={cn("h-4 w-4 shrink-0", pathname === "/settings" ? "text-slate-700" : "")} />
           {open && <span>Settings</span>}
+        </a>
+      </div>
+
+      {/* Capabilities */}
+      <div className="px-3 py-1 shrink-0">
+        <a
+          href="/capabilities"
+          title="Capabilities"
+          className={cn(
+            "flex items-center gap-2.5 w-full rounded-xl py-2 text-sm transition-all",
+            pathname === "/capabilities"
+              ? "bg-slate-100 text-slate-900 font-medium"
+              : "text-slate-500 hover:bg-slate-100 hover:text-slate-700",
+            open ? "px-3" : "justify-center px-2"
+          )}
+        >
+          <Zap className={cn("h-4 w-4 shrink-0", pathname === "/capabilities" ? "text-slate-700" : "")} />
+          {open && <span>Capabilities</span>}
         </a>
       </div>
 

@@ -38,15 +38,18 @@ Returns all published variants of a product (e.g. all sizes/colours of a parent 
 ### `search_documents_tool`
 **Permission:** `documents:read`
 
-Paginated search across MetaKocka documents. Supports free-text query and structured `query_advance` filters (date ranges, payment status, partner email, product codes, etc.).
+Paginated search across MetaKocka documents. Always returns minimal `"ids"` results (mk_id, count_code). Use `get_document_tool` for details on specific records.
 
 **Key doc_types:** `sales_order`, `sales_bill_domestic`, `sales_bill_foreign`, `sales_offer`, `purchase_order`, `warehouse_acceptance_note`, `warehouse_packing_list`, `transfer_order`, `workorder`
 
-**result_type:** `"ids"` (default, minimal fields) or `"doc"` (full documents).
+**`show_status_code=True`** — include `status_code` in each result without fetching full docs.
 
-**Status filtering note:** MetaKocka uses text-based status codes, not numeric IDs. Filter client-side on `status_code` field:
-- `"Nov"` — new / unprocessed
-- `"Odpremljen"` — shipped
+**Date filters** — values are auto-normalized (bare dates get `+02:00` appended):
+- `doc_date_from` / `doc_date_to` — format `YYYY-MM-DD+02:00`
+- `last_change_from` / `last_change_to` — format `YYYY-MM-DDThh:mm:ss+02:00`
+- `status_change_from` / `status_change_to` + `status_change_list` — filter by status transition
+
+**Status filtering:** Use `{"type": "status_list", "value": "draft,ready_to_ship"}` to filter directly. No post-processing needed.
 
 ### `discover_document_filters`
 **Permission:** `documents:read`
@@ -56,7 +59,9 @@ Calls MetaKocka's filter discovery endpoint to list all valid `query_advance` fi
 ### `get_document_tool`
 **Permission:** `documents:read`
 
-Fetches a single complete document by `doc_id`, `doc_count_code`, or `buyer_order`.
+Fetches a single document by `doc_id`, `doc_count_code`, or `buyer_order`.
+
+By default returns a **slim summary** (key fields only): `mk_id`, `count_code`, `doc_date`, `status_code`, `partner` name, `sum_all`, `sum_basic`, `currency_code`, `duo_payment`, `buyer_order`, `warehouse`, `doc_link_list`, and a trimmed `product_list` (code/name/amount/price/tax). Set `slim=False` to get the full raw document.
 
 **Supported doc_types:**
 
@@ -83,12 +88,21 @@ Fetches a single complete document by `doc_id`, `doc_count_code`, or `buyer_orde
 | `workorder` | Work/production order |
 | `complaint` | Customer complaint |
 
-**Optional flags** (mainly for `sales_order`):
+**Optional flags** (use with `slim=False` for full data):
 - `return_delivery_service_events` — carrier event history
 - `return_delivery_stats` — delivery timing stats
 - `return_document_info` — full audit trail
 - `show_attachments` — attached file URLs
 - `show_tracking_url` — tracking URL in `extra_column`
+
+### `get_document_url`
+**Permission:** `documents:read`
+
+Generates a direct MetaKocka UI link for a document given its `doc_type` and `mk_id`. Returns a clickable URL of the form `https://main.metakocka.si/index.jsp#{fragment}?id={mk_id}`.
+
+Supported doc_types: `sales_order`, `sales_offer`, `sales_bill_domestic`, `sales_bill_foreign`, `sales_bill_prepaid`, `sales_bill_credit_note`, `purchase_order`, `purchase_bill_foreign`, `warehouse_receiving_note`, `warehouse_acceptance_note`, `warehouse_delivery_note`, `warehouse_packing_list`, `warehouse_inventory`, `transfer_order`.
+
+> **FIXME:** UI fragments unknown for `sales_bill_retail`, `purchase_bill_domestic`, `purchase_bill_prepaid`, `purchase_bill_credit_note`, `workorder`, `complaint`.
 
 ---
 
@@ -161,6 +175,7 @@ Returns all delivery service price lists configured in MetaKocka. Each entry inc
 | `search_documents_tool` | `documents:read` |
 | `discover_document_filters` | `documents:read` |
 | `get_document_tool` | `documents:read` |
+| `get_document_url` | `documents:read` |
 | `get_partner_tool` | `partners:read` |
 | `search_blacklist_partner_tool` | `partners:blacklist:read` |
 | `get_warehouse_list_tool` | `warehouse:read` |
