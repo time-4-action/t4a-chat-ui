@@ -7,7 +7,7 @@ import { UserMemory } from "@/models/user-memory";
 import { UserTone } from "@/models/user-tone";
 import { createAnthropic } from "@ai-sdk/anthropic";
 import { createMCPClient } from "@ai-sdk/mcp";
-import { streamText, generateText, stepCountIs, convertToModelMessages, UIMessage } from "ai";
+import { streamText, generateText, stepCountIs, convertToModelMessages, UIMessage, ToolSet } from "ai";
 import { NextRequest, NextResponse } from "next/server";
 import { DEFAULT_MODEL, ModelId, calculateRequestCost } from "@/lib/models";
 
@@ -291,7 +291,7 @@ export async function POST(req: NextRequest) {
     : basePrompt;
 
   let mcpClient: Awaited<ReturnType<typeof createMCPClient>> | null = null;
-  let mcpTools: Record<string, unknown> = {};
+  let mcpTools: ToolSet = {};
 
   if (process.env.MCP_SERVER_URL) {
     try {
