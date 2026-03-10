@@ -343,7 +343,17 @@ export async function POST(req: NextRequest) {
 
   if (process.env.MCP_SERVER_URL) {
     try {
-      const accessToken = session.tokenSet?.accessToken;
+      const { token: accessToken } = await auth0.getAccessToken();
+      if (accessToken) {
+        try {
+          const payload = JSON.parse(Buffer.from(accessToken.split(".")[1], "base64url").toString());
+          console.log("[MCP] token aud:", payload.aud, "| exp:", new Date((payload.exp ?? 0) * 1000).toISOString());
+        } catch {
+          console.warn("[MCP] token is opaque (not a JWT) — audience was not configured at login time");
+        }
+      } else {
+        console.warn("[MCP] getAccessToken() returned empty token");
+      }
       mcpClient = await createMCPClient({
         transport: {
           type: "sse",
