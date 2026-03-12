@@ -15,6 +15,7 @@ const UserPreferenceSchema = new Schema({
   },
   emailTemplates: { type: String, default: "" },
   customInstructions: { type: String, default: "" },
+  promptCaching: { type: Boolean, default: true },
   updatedAt: { type: Date, default: Date.now },
 });
 

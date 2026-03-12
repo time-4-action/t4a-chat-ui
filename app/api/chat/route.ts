@@ -355,9 +355,13 @@ export async function POST(req: NextRequest) {
   const modelId: ModelId = (requestedModel as ModelId) ?? DEFAULT_MODEL;
   const isAnthropicModel = MODEL_CONFIGS[modelId].provider === "anthropic";
 
+  await connectDB();
+  const userPrefs = await UserPreference.findOne({ userId: session.user.sub });
+  const promptCachingEnabled = userPrefs?.promptCaching !== false;
+
   const rawMessages = await convertToModelMessages(uiMessages);
   const processedMessages = applyMessageWindow(truncateToolResults(rawMessages));
-  const messages = isAnthropicModel ? withCacheControl(processedMessages) : processedMessages;
+  const messages = isAnthropicModel && promptCachingEnabled ? withCacheControl(processedMessages) : processedMessages;
 
   // Extract last user message text + files for MongoDB save
   const lastUserMsg = [...uiMessages].reverse().find((m) => m.role === "user");
@@ -378,7 +382,6 @@ export async function POST(req: NextRequest) {
       };
     });
 
-  await connectDB();
   const basePrompt = await buildSystemPrompt(session.user.sub, toneId);
   const systemPrompt = mode && MODE_PROMPTS[mode]
     ? MODE_PROMPTS[mode] + basePrompt

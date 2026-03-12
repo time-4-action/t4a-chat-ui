@@ -35,6 +35,7 @@ interface Preferences {
   };
   emailTemplates: string;
   customInstructions: string;
+  promptCaching: boolean;
 }
 
 const EXPORT_PROMPT = `Export all of my stored memories and any context you've learned about me from past conversations. Preserve my words verbatim where possible, especially for instructions and preferences.
@@ -68,6 +69,7 @@ const defaultPrefs: Preferences = {
   communicationStyle: { tone: "", formality: "", signatureStyle: "" },
   emailTemplates: "",
   customInstructions: "",
+  promptCaching: true,
 };
 
 const NAV = [
@@ -78,6 +80,7 @@ const NAV = [
   { id: "tones",         label: "Tones" },
   { id: "memory",        label: "Memory" },
   { id: "usage",         label: "Usage" },
+  { id: "advanced",      label: "Advanced" },
 ];
 
 export default function SettingsPage() {
@@ -102,6 +105,7 @@ export default function SettingsPage() {
   const [editingTone, setEditingTone] = useState<ToneDoc | null>(null);
   const [togglingTone, setTogglingTone] = useState<string | null>(null);
   const [deletingTone, setDeletingTone] = useState<string | null>(null);
+  const [cachingWarnPending, setCachingWarnPending] = useState(false);
   const [openToneMenuId, setOpenToneMenuId] = useState<string | null>(null);
 
   function navigate(id: string) {
@@ -121,6 +125,7 @@ export default function SettingsPage() {
           communicationStyle: { ...defaultPrefs.communicationStyle, ...data.communicationStyle },
           emailTemplates: data.emailTemplates ?? "",
           customInstructions: data.customInstructions ?? "",
+          promptCaching: data.promptCaching !== false,
         };
         setPrefs(loaded);
         savedPrefs.current = loaded;
@@ -280,11 +285,11 @@ export default function SettingsPage() {
         </a>
         <span className="text-gray-200 hidden sm:inline">/</span>
         <span className="text-sm font-semibold text-gray-800">
-          {activeSection === "memory" ? "Memory" : "Settings"}
+          {activeSection === "memory" ? "Memory" : activeSection === "advanced" ? "Advanced" : "Settings"}
         </span>
 
         <div className="ml-auto flex items-center gap-3">
-          {activeSection !== "memory" && (
+          {activeSection !== "memory" && activeSection !== "advanced" && (
             <>
               {saveState === "saved" && (
                 <span className="text-xs text-emerald-600 font-medium flex items-center gap-1.5">
@@ -361,7 +366,7 @@ export default function SettingsPage() {
           <div className="max-w-2xl mx-auto px-4 sm:px-6 pt-6 sm:pt-10 pb-16 space-y-4">
 
             {/* Profile */}
-            {activeSection !== "memory" && (
+            {activeSection !== "memory" && activeSection !== "advanced" && (
               <Card id="profile" title="Profile" description="Your identity used to personalise AI responses."
                 action={<AutofillButton loading={!!autofilling.profile} onClick={() => setModalSection("profile")} />}
               >
@@ -391,7 +396,7 @@ export default function SettingsPage() {
             )}
 
             {/* Communication */}
-            {activeSection !== "memory" && (
+            {activeSection !== "memory" && activeSection !== "advanced" && (
             <Card id="communication" title="Communication" description="How the AI should speak and write on your behalf."
               action={<AutofillButton loading={!!autofilling.communication} onClick={() => setModalSection("communication")} />}
             >
@@ -428,7 +433,7 @@ export default function SettingsPage() {
             )}
 
             {/* Email style */}
-            {activeSection !== "memory" && (
+            {activeSection !== "memory" && activeSection !== "advanced" && (
             <Card id="email" title="Email style examples" description="Paste 1–3 of your typical emails so the AI can mirror your writing style."
               action={<AutofillButton loading={!!autofilling.email} onClick={() => setModalSection("email")} />}
             >
@@ -443,7 +448,7 @@ export default function SettingsPage() {
             )}
 
             {/* Custom instructions */}
-            {activeSection !== "memory" && (
+            {activeSection !== "memory" && activeSection !== "advanced" && (
             <Card id="instructions" title="Custom instructions" description="Specific rules the AI should always follow, regardless of context.">
               <textarea
                 value={prefs.customInstructions}
@@ -455,8 +460,124 @@ export default function SettingsPage() {
             </Card>
             )}
 
+            {/* Advanced — standalone view, same pattern as Memory */}
+            {activeSection === "advanced" && (
+            <section id="advanced" className="bg-white rounded-2xl border border-gray-100 overflow-hidden">
+              <div className="px-4 sm:px-6 pt-5 pb-4 border-b border-gray-100">
+                <h2 className="text-sm font-semibold text-gray-900">Advanced</h2>
+                <p className="text-xs text-gray-400 mt-0.5">Performance and cost optimisation settings.</p>
+              </div>
+
+              <div className="px-4 sm:px-6 py-5 space-y-6">
+
+                {/* Prompt caching */}
+                <div>
+                  <div className="flex items-start justify-between gap-6 mb-4">
+                    <div className="min-w-0">
+                      <p className="text-sm font-semibold text-gray-800">Prompt caching</p>
+                      <p className="text-xs text-gray-400 mt-1 leading-relaxed">
+                        Stores your system prompt and conversation history on Anthropic&apos;s servers between messages.
+                        Cached tokens cost 10% of the normal price — saving up to 90% on repeated context.
+                        Only applies to Anthropic models (Claude Sonnet, Haiku, Opus).
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={prefs.promptCaching}
+                      onClick={() => {
+                        if (prefs.promptCaching) {
+                          setCachingWarnPending(true);
+                        } else {
+                          setPrefs((p) => ({ ...p, promptCaching: true }));
+                          fetch("/api/preferences", {
+                            method: "PUT",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({ promptCaching: true }),
+                          });
+                        }
+                      }}
+                      className={`mt-0.5 shrink-0 relative w-9 h-5 rounded-full transition-colors cursor-pointer ${
+                        prefs.promptCaching ? "bg-gray-900" : "bg-gray-200 hover:bg-gray-300"
+                      }`}
+                    >
+                      <span className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white shadow-sm transition-transform ${
+                        prefs.promptCaching ? "translate-x-4" : "translate-x-0"
+                      }`} />
+                    </button>
+                  </div>
+
+                  {/* Disable warning */}
+                  {cachingWarnPending && (
+                    <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 flex items-start gap-3">
+                      <svg className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
+                      </svg>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-xs font-semibold text-amber-800">This will increase your costs</p>
+                        <p className="text-xs text-amber-700 mt-0.5 leading-relaxed">
+                          Without caching, every message re-sends your full system prompt and conversation history at full price.
+                          Multi-turn conversations can cost up to 5× more. Only disable if you are seeing stale or incorrect responses.
+                        </p>
+                        <div className="flex items-center gap-2 mt-3">
+                          <button
+                            onClick={async () => {
+                              setCachingWarnPending(false);
+                              setPrefs((p) => ({ ...p, promptCaching: false }));
+                              await fetch("/api/preferences", {
+                                method: "PUT",
+                                headers: { "Content-Type": "application/json" },
+                                body: JSON.stringify({ promptCaching: false }),
+                              });
+                            }}
+                            className="px-3 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-700 text-white text-xs font-semibold transition-colors cursor-pointer"
+                          >
+                            Disable anyway
+                          </button>
+                          <button
+                            onClick={() => setCachingWarnPending(false)}
+                            className="px-3 py-1.5 rounded-lg border border-amber-200 text-amber-700 hover:bg-amber-100 text-xs font-semibold transition-colors cursor-pointer"
+                          >
+                            Keep enabled
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Savings table */}
+                  <div className="rounded-xl border border-gray-100 overflow-hidden text-xs">
+                    <div className="grid grid-cols-4 bg-gray-50 px-4 py-2 text-[10px] font-semibold text-gray-400 uppercase tracking-widest">
+                      <span>Conversation</span>
+                      <span className="text-right">Without cache</span>
+                      <span className="text-right">With cache</span>
+                      <span className="text-right text-emerald-600">Saved</span>
+                    </div>
+                    {[
+                      { label: "2 turns",   without: "$0.011", with: "$0.008", saved: "~29%" },
+                      { label: "5 turns",   without: "$0.033", with: "$0.012", saved: "~64%" },
+                      { label: "10 turns",  without: "$0.083", with: "$0.020", saved: "~76%" },
+                      { label: "20 turns",  without: "$0.233", with: "$0.042", saved: "~82%" },
+                    ].map((row) => (
+                      <div key={row.label} className="grid grid-cols-4 px-4 py-2.5 border-t border-gray-50 text-gray-600">
+                        <span className="font-medium text-gray-800">{row.label}</span>
+                        <span className="text-right text-gray-400">{row.without}</span>
+                        <span className="text-right">{row.with}</span>
+                        <span className="text-right font-semibold text-emerald-600">{row.saved}</span>
+                      </div>
+                    ))}
+                    <div className="px-4 py-2 border-t border-gray-100 bg-gray-50">
+                      <p className="text-[10px] text-gray-400">Estimates based on Claude Sonnet at $3/1M input tokens, ~1500-token system prompt, ~200 tokens per turn.</p>
+                    </div>
+                  </div>
+                </div>
+
+              </div>
+            </section>
+            )}
+
             {/* Tones */}
-            {activeSection !== "memory" && (
+            {activeSection !== "memory" && activeSection !== "advanced" && (
             <section id="tones" className="bg-white rounded-2xl border border-gray-100 overflow-hidden">
               <div className="px-4 sm:px-6 pt-5 pb-4 border-b border-gray-100 flex items-start justify-between gap-4">
                 <div>
@@ -734,7 +855,7 @@ export default function SettingsPage() {
             )}
 
             {/* Usage */}
-            {activeSection !== "memory" && (
+            {activeSection !== "memory" && activeSection !== "advanced" && (
             <Card id="usage" title="Usage" description="Your API usage and cost overview.">
               {usageLoading ? (
                 <div className="flex gap-3">
@@ -997,5 +1118,6 @@ function NavIcon({ id, active }: { id: string; active: boolean }) {
   if (id === "tones")         return <svg className={cls} {...s}><path strokeLinecap="round" strokeLinejoin="round" d="M7 21a4 4 0 01-4-4V5a2 2 0 012-2h4a2 2 0 012 2v12a4 4 0 01-4 4zm0 0h12a2 2 0 002-2v-4a2 2 0 00-2-2h-2.343M11 7.343l1.657-1.657a2 2 0 012.828 0l2.829 2.829a2 2 0 010 2.828l-8.486 8.485M7 17h.01" /></svg>;
   if (id === "memory")        return <svg className={cls} {...s}><path strokeLinecap="round" strokeLinejoin="round" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" /></svg>;
   if (id === "usage")         return <svg className={cls} {...s}><path strokeLinecap="round" strokeLinejoin="round" d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z" /></svg>;
+  if (id === "advanced")      return <svg className={cls} {...s}><path strokeLinecap="round" strokeLinejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" /><path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>;
   return null;
 }
