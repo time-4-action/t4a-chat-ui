@@ -131,8 +131,7 @@ Answer in maximum 2-3 short sentences or a brief bullet list (max 4 bullets). Le
 async function buildSystemPrompt(userId: string, toneId?: string): Promise<string> {
   const now = new Date();
   const dateStr = now.toLocaleDateString("en-US", { weekday: "long", year: "numeric", month: "long", day: "numeric" });
-  const timeStr = now.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", timeZoneName: "short" });
-  const dateContext = `\n\nCurrent date and time: ${dateStr}, ${timeStr}`;
+  const dateContext = `\n\nCurrent date: ${dateStr}`;
 
   const prefs = await UserPreference.findOne({ userId });
 
@@ -326,13 +325,13 @@ function withCacheControl(messages: any[]): any[] {
     last.content = [{
       type: "text",
       text: last.content,
-      experimental_providerMetadata: { anthropic: { cacheControl: { type: "ephemeral" } } },
+      providerOptions: { anthropic: { cacheControl: { type: "ephemeral" } } },
     }];
   } else if (Array.isArray(last.content) && last.content.length > 0) {
     const parts = [...last.content];
     parts[parts.length - 1] = {
       ...parts[parts.length - 1],
-      experimental_providerMetadata: { anthropic: { cacheControl: { type: "ephemeral" } } },
+      providerOptions: { anthropic: { cacheControl: { type: "ephemeral" } } },
     };
     last.content = parts;
   }
