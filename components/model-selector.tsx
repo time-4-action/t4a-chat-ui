@@ -1,7 +1,7 @@
 "use client";
 
 import { MODEL_CONFIGS, MODEL_ORDER, ModelId } from "@/lib/models";
-import { ChevronDown, Check, Brain, Sparkles, Zap, Lock } from "lucide-react";
+import { ChevronDown, Check, Brain, Sparkles, Zap, Lock, Bot, Cpu, Star, Atom } from "lucide-react";
 import { useState, useRef, useEffect } from "react";
 import { cn } from "@/lib/utils";
 
@@ -16,6 +16,10 @@ const ICONS: Record<ModelId, React.ElementType> = {
   "claude-opus-4-6": Brain,
   "claude-sonnet-4-6": Sparkles,
   "claude-haiku-4-5-20251001": Zap,
+  "gpt-4o": Bot,
+  "gpt-4o-mini": Cpu,
+  "gpt-5-mini": Star,
+  "gpt-5-nano": Atom,
 };
 
 export default function ModelSelector({ value, onChange, disabled, locked }: Props) {
@@ -92,14 +96,23 @@ export default function ModelSelector({ value, onChange, disabled, locked }: Pro
 
           {/* Model cards */}
           <div className="p-2 space-y-1">
-            {MODEL_ORDER.map((id) => {
+            {MODEL_ORDER.map((id, idx) => {
               const config = MODEL_CONFIGS[id];
               const isSelected = id === value;
               const Icon = ICONS[id];
+              const prevConfig = idx > 0 ? MODEL_CONFIGS[MODEL_ORDER[idx - 1]] : null;
+              const showProviderDivider = prevConfig && prevConfig.provider !== config.provider;
 
               return (
+                <div key={id}>
+                  {showProviderDivider && (
+                    <div className="flex items-center gap-2 px-1 py-2">
+                      <div className="flex-1 h-px bg-slate-100" />
+                      <span className="text-[10px] font-bold text-slate-300 uppercase tracking-widest">OpenAI</span>
+                      <div className="flex-1 h-px bg-slate-100" />
+                    </div>
+                  )}
                 <button
-                  key={id}
                   onClick={() => { onChange(id); setOpen(false); }}
                   className={cn(
                     "w-full text-left rounded-xl px-3.5 py-3 transition-all duration-150 border",
@@ -121,6 +134,11 @@ export default function ModelSelector({ value, onChange, disabled, locked }: Pro
                             Recommended
                           </span>
                         )}
+                        {"badge" in config && config.badge && (
+                          <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-red-100 text-red-600">
+                            {config.badge}
+                          </span>
+                        )}
                       </div>
 
                       {/* Purpose description */}
@@ -134,11 +152,9 @@ export default function ModelSelector({ value, onChange, disabled, locked }: Pro
                           {config.modelName}
                         </span>
                         <span className="text-slate-200">·</span>
-                        <span className={cn("text-xs font-bold tracking-tight", config.text)}>
-                          {config.costSymbol}
-                        </span>
-                        <span className="text-xs font-bold tracking-tight text-slate-200">
-                          {"$$$".slice(config.costSymbol.length)}
+                        <span className="text-xs font-bold tracking-tight">
+                          <span className={config.text}>{config.costSymbol}</span>
+                          <span className="text-slate-200">{"$$$".slice(config.costSymbol.length)}</span>
                         </span>
                       </div>
                     </div>
@@ -148,6 +164,7 @@ export default function ModelSelector({ value, onChange, disabled, locked }: Pro
                     )}
                   </div>
                 </button>
+                </div>
               );
             })}
           </div>

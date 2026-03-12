@@ -14,6 +14,60 @@ const HLJS_LANGUAGES = new Set([
   "go","rust","ruby","rb","php","swift","kotlin","r","markdown","md","plaintext","text",
 ]);
 
+function parseDsvLine(line: string, sep: string): string[] {
+  if (sep === "\t") return line.split("\t").map((c) => c.trim());
+  // Handle quoted CSV fields
+  const fields: string[] = [];
+  let current = "";
+  let inQuotes = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (ch === '"') {
+      if (inQuotes && line[i + 1] === '"') { current += '"'; i++; }
+      else inQuotes = !inQuotes;
+    } else if (ch === sep && !inQuotes) {
+      fields.push(current.trim());
+      current = "";
+    } else {
+      current += ch;
+    }
+  }
+  fields.push(current.trim());
+  return fields;
+}
+
+function DsvTable({ content, sep }: { content: string; sep: "," | "\t" }) {
+  const rows = content.split("\n").filter((l) => l.trim());
+  if (rows.length < 2) return <CodeBlock language={sep === "," ? "csv" : "tsv"}>{content}</CodeBlock>;
+  const [header, ...body] = rows.map((r) => parseDsvLine(r, sep));
+  return (
+    <div className="overflow-x-auto my-3 rounded-lg border border-slate-200">
+      <table className="text-xs border-collapse w-full">
+        <thead className="bg-slate-50">
+          <tr>
+            {header.map((h, i) => (
+              <th key={i} className="px-3 py-2 text-left font-semibold text-slate-700 border-b border-slate-200 whitespace-nowrap">
+                {h}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {body.map((row, ri) => (
+            <tr key={ri} className={ri % 2 === 0 ? "bg-white" : "bg-slate-50/60"}>
+              {row.map((cell, ci) => (
+                <td key={ci} className="px-3 py-2 text-slate-600 border-b border-slate-100">
+                  {cell}
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 function CodeBlock({ language, children }: { language: string; children: string }) {
   const [copied, setCopied] = useState(false);
 
@@ -53,8 +107,8 @@ function CodeBlock({ language, children }: { language: string; children: string 
 }
 
 /**
- * Detect runs of lines that look like CSV (outside existing code fences)
- * and wrap them in ```csv fences.
+ * Detect runs of lines that look like CSV or TSV (outside existing code fences)
+ * and wrap them in ```csv / ```tsv fences.
  *
  * Rules to avoid false positives:
  *  - Skip markdown table rows (start/end with |)
@@ -62,33 +116,57 @@ function CodeBlock({ language, children }: { language: string; children: string 
  *  - Skip list items (-, *, +, 1.)
  *  - Skip headings (#)
  *  - Skip blockquotes (>)
- *  - Require ≥2 commas per line (3+ columns)
- *  - All lines in a block must have the SAME comma count (consistent columns)
+ *  - TSV: ≥1 tab per line
+ *  - CSV: ≥1 comma per line (2+ columns), uniform comma count across all lines
  *  - Require ≥2 lines to form a block
+ *  - TSV takes priority over CSV when both match
  */
-function autoFenceCsv(text: string): string {
+function autoFenceDsv(text: string): string {
   const lines = text.split("\n");
   const result: string[] = [];
   let insideFence = false;
   let i = 0;
 
-  const commaCount = (l: string) => (l.match(/,/g) ?? []).length;
+  const sepCount = (l: string, sep: string) => l.split(sep).length - 1;
+
+  const isStructural = (trimmed: string) => {
+    if (!trimmed) return true;
+    if (/^[|#>]/.test(trimmed)) return true;
+    if (/^[-*+]\s/.test(trimmed)) return true;
+    if (/^\d+[.)]\s/.test(trimmed)) return true;
+    if (/^[-|: ]+$/.test(trimmed)) return true;
+    return false;
+  };
+
+  const isTsvLike = (l: string) => {
+    const trimmed = l.trim();
+    if (isStructural(trimmed)) return false;
+    return sepCount(trimmed, "\t") >= 1;
+  };
 
   const isCsvLike = (l: string) => {
     const trimmed = l.trim();
-    if (!trimmed) return false;
-    // Exclude markdown structural lines
-    if (/^[|#>]/.test(trimmed)) return false;              // table rows, headings, blockquotes
-    if (/^[-*+]\s/.test(trimmed)) return false;            // unordered list items
-    if (/^\d+[.)]\s/.test(trimmed)) return false;          // ordered list items
-    if (/^[-|: ]+$/.test(trimmed)) return false;           // table separator rows
-    return commaCount(trimmed) >= 2;
+    if (isStructural(trimmed)) return false;
+    if (sepCount(trimmed, "\t") >= 1) return false; // prefer TSV
+    return sepCount(trimmed, ",") >= 1;
+  };
+
+  const tryCollectBlock = (startLine: number, isLike: (l: string) => boolean, sep: string): string[] | null => {
+    const block: string[] = [];
+    let j = startLine;
+    while (j < lines.length && !lines[j].trim().startsWith("```") && isLike(lines[j])) {
+      block.push(lines[j]);
+      j++;
+    }
+    if (block.length < 2) return null;
+    const firstCount = sepCount(block[0].trim(), sep);
+    const isUniform = block.every((l) => sepCount(l.trim(), sep) === firstCount);
+    return isUniform ? block : null;
   };
 
   while (i < lines.length) {
     const line = lines[i];
 
-    // Track fence boundaries
     if (line.trim().startsWith("```")) {
       insideFence = !insideFence;
       result.push(line);
@@ -96,26 +174,26 @@ function autoFenceCsv(text: string): string {
       continue;
     }
 
-    if (!insideFence && isCsvLike(line)) {
-      const block: string[] = [];
-      while (i < lines.length && !lines[i].trim().startsWith("```") && isCsvLike(lines[i])) {
-        block.push(lines[i]);
-        i++;
+    if (!insideFence) {
+      if (isTsvLike(line)) {
+        const block = tryCollectBlock(i, isTsvLike, "\t");
+        if (block) {
+          result.push("```tsv", ...block, "```");
+          i += block.length;
+          continue;
+        }
+      } else if (isCsvLike(line)) {
+        const block = tryCollectBlock(i, isCsvLike, ",");
+        if (block) {
+          result.push("```csv", ...block, "```");
+          i += block.length;
+          continue;
+        }
       }
-
-      // All lines must share the same comma count (uniform columns = real CSV)
-      const firstCount = commaCount(block[0]);
-      const isUniform = block.every((l) => commaCount(l) === firstCount);
-
-      if (block.length >= 2 && isUniform) {
-        result.push("```csv", ...block, "```");
-      } else {
-        result.push(...block);
-      }
-    } else {
-      result.push(line);
-      i++;
     }
+
+    result.push(line);
+    i++;
   }
 
   return result.join("\n");
@@ -306,9 +384,8 @@ export default function MessageBubble({ message, signatureHtml = "" }: { message
               const isBlock = !!className;
               if (isBlock) {
                 const lang = (className ?? "").replace("language-", "");
-                return (
-                  <CodeBlock language={lang}>{String(children).replace(/\n$/, "")}</CodeBlock>
-                );
+                const content = String(children).replace(/\n$/, "");
+                return <CodeBlock language={lang}>{content}</CodeBlock>;
               }
               return (
                 <code className="bg-slate-100 text-slate-700 rounded px-1.5 py-0.5 text-xs font-mono">
@@ -369,7 +446,7 @@ export default function MessageBubble({ message, signatureHtml = "" }: { message
             ),
           }}
         >
-          {autoFenceCsv(textContent)}
+          {autoFenceDsv(textContent)}
         </ReactMarkdown>
       </div>
     </div>

@@ -6,12 +6,20 @@ import { UserPreference } from "@/models/user-preference";
 import { UserMemory } from "@/models/user-memory";
 import { UserTone } from "@/models/user-tone";
 import { createAnthropic } from "@ai-sdk/anthropic";
+import { createOpenAI } from "@ai-sdk/openai";
 import { createMCPClient } from "@ai-sdk/mcp";
 import { streamText, generateText, stepCountIs, convertToModelMessages, UIMessage, ToolSet } from "ai";
 import { NextRequest, NextResponse } from "next/server";
-import { DEFAULT_MODEL, ModelId, calculateRequestCost } from "@/lib/models";
+import { DEFAULT_MODEL, ModelId, MODEL_CONFIGS, calculateRequestCost } from "@/lib/models";
 
 const anthropic = createAnthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+const openai = createOpenAI({ apiKey: process.env.OPENAI_API_KEY });
+
+function getModel(modelId: ModelId) {
+  const config = MODEL_CONFIGS[modelId];
+  if (config.provider === "openai") return openai(modelId);
+  return anthropic(modelId);
+}
 
 function htmlToMarkdown(html: string): string {
   return html
@@ -36,23 +44,60 @@ function htmlToMarkdown(html: string): string {
 
 const BASE_SYSTEM_PROMPT = `You are the time-4-action AI assistant. You help the team with product information, orders, and internal tasks. You have access to company tools — always use them when asked about products, orders, or customer data.
 
-Formatting rules:
-- Use **bold** for key terms, names, values, and important info
-- Use bullet lists or numbered lists for multiple items — never run them together in a sentence
-- Use headings (##) when the response has multiple distinct sections
-- Use tables for structured data like product specs, order details, or comparisons
-- Keep paragraphs short — one idea per paragraph
-- Never dump a wall of text — break everything up visually
-- Be direct and concise — lead with the answer, then add detail below
-- Never use emojis anywhere in your responses
+## Response structure
+
+Always structure your response in this order:
+1. **Direct answer or result** — lead with the key finding immediately, no preamble
+2. **Detail or breakdown** — use the formatting rules below to present it clearly
+3. **Follow-up or next step** — one short sentence if relevant, never mandatory
+
+Never start a response with filler like "Sure!", "Of course!", "Great question!", or "I found...".
+
+## Formatting rules
+
+- Use **bold** for key values, names, SKUs, amounts, statuses, and important terms
+- Use bullet lists for multiple items — one item per line, never run together in prose
+- Use numbered lists for steps or ranked results
+- Use \`## Heading\` when a response has two or more distinct sections
+- Keep paragraphs to 1–2 sentences — one idea per paragraph
+- Always leave a blank line between paragraphs, lists, headings, and tables
+- Never dump a wall of text — every block of content must be visually separated
+- Never use emojis
 - Never use horizontal rules (---) or decorative separators
 
-Memory rules:
+## After tool calls
+
+When you retrieve data from a tool:
+- Always present the results clearly — do not narrate what you did ("I called the tool and got...")
+- If multiple results come back, use a table or structured list — never run them together
+- If a tool returns no results, say so plainly: "No results found for X."
+- If you called multiple tools, present each result in its own clearly labelled section
+
+## Tabular data rules
+
+NEVER output tabular data as plain text or prose — always use one of these two formats:
+
+**Format A — Markdown table** (default for structured results):
+| Column | Column |
+|--------|--------|
+| value  | value  |
+
+**Format B — Fenced code block** (only when the user explicitly asks for TSV, CSV, or export):
+\`\`\`tsv
+col1\tcol2\tcol3
+val1\tval2\tval3
+\`\`\`
+Use real tab characters between columns in TSV. For CSV use commas in a \`\`\`csv\`\`\` block.
+
+Never output raw tab-separated or comma-separated rows without a fence block.
+
+## Memory rules
+
 - You have persistent memory of this user across conversations — never say otherwise
-- Never explain, reference, or acknowledge how your memory system works internally
-- Never say things like "I've noted this", "I'll remember that", "this will be reflected going forward", or "depending on how the memory system is configured"
-- When a user tells you something about themselves, simply acknowledge it naturally and move on — treat it as already known
-- If asked to update or remember something, just confirm it briefly ("Got it, 19.") and continue`;
+- Never explain or reference how the memory system works internally
+- Never say "I've noted this", "I'll remember that", or "depending on how the memory system is configured"
+- When a user tells you something about themselves, acknowledge it naturally and move on
+- If asked to remember something, confirm briefly ("Got it.") and continue`;
 
 const MODE_PROMPTS: Record<string, string> = {
   email: `CRITICAL OUTPUT RULE — EMAIL MODE ACTIVE
@@ -309,9 +354,11 @@ export async function POST(req: NextRequest) {
   };
 
   const modelId: ModelId = (requestedModel as ModelId) ?? DEFAULT_MODEL;
+  const isAnthropicModel = MODEL_CONFIGS[modelId].provider === "anthropic";
 
   const rawMessages = await convertToModelMessages(uiMessages);
-  const messages = withCacheControl(applyMessageWindow(truncateToolResults(rawMessages)));
+  const processedMessages = applyMessageWindow(truncateToolResults(rawMessages));
+  const messages = isAnthropicModel ? withCacheControl(processedMessages) : processedMessages;
 
   // Extract last user message text + files for MongoDB save
   const lastUserMsg = [...uiMessages].reverse().find((m) => m.role === "user");
@@ -344,16 +391,6 @@ export async function POST(req: NextRequest) {
   if (process.env.MCP_SERVER_URL) {
     try {
       const { token: accessToken } = await auth0.getAccessToken();
-      if (accessToken) {
-        try {
-          const payload = JSON.parse(Buffer.from(accessToken.split(".")[1], "base64url").toString());
-          console.log("[MCP] token aud:", payload.aud, "| exp:", new Date((payload.exp ?? 0) * 1000).toISOString());
-        } catch {
-          console.warn("[MCP] token is opaque (not a JWT) — audience was not configured at login time");
-        }
-      } else {
-        console.warn("[MCP] getAccessToken() returned empty token");
-      }
       mcpClient = await createMCPClient({
         transport: {
           type: "sse",
@@ -373,7 +410,7 @@ export async function POST(req: NextRequest) {
 
   try {
     const result = streamText({
-      model: anthropic(modelId),
+      model: getModel(modelId),
       system: systemPrompt,
       messages,
       stopWhen: stepCountIs(5),
@@ -392,11 +429,13 @@ export async function POST(req: NextRequest) {
           const isFirst = uiMessages.filter((m) => m.role === "user").length === 1;
 
           // totalUsage aggregates across all steps (tool call rounds).
-          // inputTokens = total (noCache + cacheRead + cacheWrite).
-          // inputTokenDetails breaks it down so we can price each bucket correctly.
-          const noCacheInputTokens = totalUsage.inputTokenDetails?.noCacheTokens   ?? 0;
+          // For Anthropic: inputTokenDetails breaks down cache buckets for accurate pricing.
+          // For OpenAI: no cache breakdown — use inputTokens directly at full price.
           const cacheReadTokens    = totalUsage.inputTokenDetails?.cacheReadTokens  ?? 0;
           const cacheWriteTokens   = totalUsage.inputTokenDetails?.cacheWriteTokens ?? 0;
+          const noCacheInputTokens = isAnthropicModel
+            ? (totalUsage.inputTokenDetails?.noCacheTokens ?? 0)
+            : (totalUsage.inputTokens ?? 0);
           const outputTokens       = totalUsage.outputTokens ?? 0;
 
           console.log("[chat] tokens — noCache:", noCacheInputTokens, "cacheRead:", cacheReadTokens, "cacheWrite:", cacheWriteTokens, "output:", outputTokens);

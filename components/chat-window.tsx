@@ -765,7 +765,12 @@ export default function ChatWindow({
           {messages.map((m) => (
             <MessageBubble key={m.id} message={m} signatureHtml={signatureHtml} />
           ))}
-          {isLoading && <ToolCallIndicator toolName={activeToolName} />}
+          {isLoading && (
+            <ToolCallIndicator
+              toolName={activeToolName}
+              status={status === "submitted" ? "submitted" : "streaming"}
+            />
+          )}
           {chatError && !isLoading && (
             <ChatErrorBanner
               error={chatError}

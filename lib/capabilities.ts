@@ -17,7 +17,7 @@ export const CAPABILITIES: CapabilityCategory[] = [
     description: "Search products by name or description, get prices, stock levels, variants, and webshop URLs by SKU.",
     tools: ["identify_product", "get_product_price", "get_product_stock", "get_product_url", "get_product_variants"],
     prompts: [
-      "What is the price of SKU TAN-001?",
+      "What is the price of SKU P07210001020?",
       "How much stock do we have for product XYZ?",
       "Show me all variants of [product name]",
     ],
@@ -30,8 +30,8 @@ export const CAPABILITIES: CapabilityCategory[] = [
     description: "Search and retrieve sales orders, invoices, purchase orders, warehouse docs, offers, and more. Get direct MetaKocka links.",
     tools: ["search_documents_tool", "discover_document_filters", "get_document_tool", "get_document_url"],
     prompts: [
-      "Find all orders from this month with status draft",
-      "Show me order #SO-12345",
+      "Show me the latest sales order",
+      "Show details about invoice 131/2026",
       "List purchase orders from last week",
     ],
   },
@@ -43,7 +43,7 @@ export const CAPABILITIES: CapabilityCategory[] = [
     description: "Look up customers and suppliers by name, email, tax number, or phone. Check the blacklist before accepting new orders.",
     tools: ["get_partner_tool", "search_blacklist_partner_tool"],
     prompts: [
-      "Find contact details for Acme d.o.o.",
+      "Find contact details for Jibe Wear",
       "Is this email address on the blacklist?",
     ],
   },
@@ -67,7 +67,7 @@ export const CAPABILITIES: CapabilityCategory[] = [
     description: "Find orders by carrier tracking code and view delivery service price lists by weight and service type.",
     tools: ["search_tracking_code_tool", "get_delivery_service_pricelists_tool"],
     prompts: [
-      "Track parcel with code 123456789",
+      "Show details about invoice 131/2026",
       "Show GLS delivery price list",
     ],
   },

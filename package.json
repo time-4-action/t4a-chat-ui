@@ -11,6 +11,7 @@
   "dependencies": {
     "@ai-sdk/anthropic": "^3.0.54",
     "@ai-sdk/mcp": "^1.0.23",
+    "@ai-sdk/openai": "^3.0.41",
     "@ai-sdk/react": "^3.0.113",
     "@auth0/nextjs-auth0": "^4.16.0",
     "@types/react-syntax-highlighter": "^15.5.13",
