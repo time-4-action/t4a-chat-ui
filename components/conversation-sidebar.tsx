@@ -16,9 +16,11 @@ import {
   Lightbulb,
   Settings,
   Zap,
+  HelpCircle,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useUser } from "@auth0/nextjs-auth0/client";
+import { useTour } from "@/lib/tour-context";
 
 interface Conversation {
   _id: string;
@@ -67,6 +69,7 @@ export default function ConversationSidebar({ open, onToggle, mobileClose }: Pro
   const editRef = useRef<HTMLInputElement>(null);
   const pathname = usePathname();
   const { user } = useUser();
+  const { startTour } = useTour();
 
   useEffect(() => {
     fetch("/api/conversations")
@@ -153,6 +156,7 @@ export default function ConversationSidebar({ open, onToggle, mobileClose }: Pro
         <button
           onClick={handleNewChat}
           title="New Chat"
+          data-tour="new-chat-btn"
           className={cn(
             "flex items-center gap-2.5 w-full rounded-xl py-2.5 text-sm font-medium transition-all",
             "bg-[#0f172a] hover:bg-slate-700 text-white shadow-sm",
@@ -286,6 +290,7 @@ export default function ConversationSidebar({ open, onToggle, mobileClose }: Pro
         <a
           href="/settings"
           title="Settings"
+          data-tour="settings-link"
           className={cn(
             "flex items-center gap-2.5 w-full rounded-xl py-2 text-sm transition-all",
             pathname === "/settings"
@@ -304,6 +309,7 @@ export default function ConversationSidebar({ open, onToggle, mobileClose }: Pro
         <a
           href="/capabilities"
           title="Capabilities"
+          data-tour="capabilities-link"
           className={cn(
             "flex items-center gap-2.5 w-full rounded-xl py-2 text-sm transition-all",
             pathname === "/capabilities"
@@ -315,6 +321,21 @@ export default function ConversationSidebar({ open, onToggle, mobileClose }: Pro
           <Zap className={cn("h-4 w-4 shrink-0", pathname === "/capabilities" ? "text-slate-700" : "")} />
           {open && <span>Capabilities</span>}
         </a>
+      </div>
+
+      {/* Help Tour */}
+      <div className="px-3 py-1 shrink-0">
+        <button
+          onClick={startTour}
+          title="How to use"
+          className={cn(
+            "flex items-center gap-2.5 w-full rounded-xl py-2 text-sm text-slate-500 hover:bg-slate-100 hover:text-slate-700 transition-all cursor-pointer",
+            open ? "px-3" : "justify-center px-2"
+          )}
+        >
+          <HelpCircle className="h-4 w-4 shrink-0" />
+          {open && <span>How to use</span>}
+        </button>
       </div>
 
       {/* Request Improvement */}

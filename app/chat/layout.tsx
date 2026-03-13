@@ -4,12 +4,15 @@ import { useState } from "react";
 import { Menu } from "lucide-react";
 import { cn } from "@/lib/utils";
 import ConversationSidebar from "@/components/conversation-sidebar";
+import { TourProvider } from "@/lib/tour-context";
+import GuidedTour from "@/components/guided-tour";
 
 export default function ChatLayout({ children }: { children: React.ReactNode }) {
   const [open, setOpen] = useState(true);
   const [mobileOpen, setMobileOpen] = useState(false);
 
   return (
+    <TourProvider>
     <div className="flex h-[100dvh] overflow-hidden bg-slate-50">
 
       {/* Mobile overlay */}
@@ -60,5 +63,7 @@ export default function ChatLayout({ children }: { children: React.ReactNode }) 
         </div>
       </main>
     </div>
+    <GuidedTour />
+    </TourProvider>
   );
 }

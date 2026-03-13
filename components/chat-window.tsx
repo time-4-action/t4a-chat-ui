@@ -575,7 +575,9 @@ export default function ChatWindow({
 
   const topBar = (
     <div className="flex items-center justify-between px-4 py-2 border-b border-slate-200 bg-white/80 backdrop-blur-sm shrink-0">
-      <ModelSelector value={model} onChange={setModel} disabled={isLoading} locked={messages.length > 0} />
+      <div data-tour="model-selector" className="inline-flex">
+        <ModelSelector value={model} onChange={setModel} disabled={isLoading} locked={messages.length > 0} />
+      </div>
       {(costUsd > 0 || isLoading) && messages.length > 0 && (
         <div className="flex items-center gap-1 text-xs text-slate-400">
           <DollarSign className="w-3 h-3" />
@@ -617,19 +619,23 @@ export default function ChatWindow({
 
   const inputBox = (
     <div className="space-y-2">
-      <ChatModeSelector
-        mode={mode}
-        onChange={setMode}
-        disabled={isLoading}
-        toneSlot={
-          <ToneSelector
-            tones={tones}
-            activeToneId={activeToneId}
-            onChange={setActiveToneId}
-            disabled={isLoading}
-          />
-        }
-      />
+      <div data-tour="mode-selector">
+        <ChatModeSelector
+          mode={mode}
+          onChange={setMode}
+          disabled={isLoading}
+          toneSlot={
+            <div data-tour="tone-selector">
+              <ToneSelector
+                tones={tones}
+                activeToneId={activeToneId}
+                onChange={setActiveToneId}
+                disabled={isLoading}
+              />
+            </div>
+          }
+        />
+      </div>
 
       {/* Input card */}
       <div
@@ -671,6 +677,7 @@ export default function ChatWindow({
           {/* Paperclip */}
           <button
             type="button"
+            data-tour="attach-btn"
             onClick={() => fileInputRef.current?.click()}
             disabled={isLoading || attachedFiles.length >= MAX_FILES}
             className={cn(
@@ -695,6 +702,7 @@ export default function ChatWindow({
 
           <textarea
             ref={inputRef}
+            data-tour="message-input"
             rows={1}
             value={input}
             onChange={(e) => setInput(e.target.value)}
@@ -711,7 +719,7 @@ export default function ChatWindow({
             className="flex-1 bg-transparent text-sm text-slate-800 placeholder:text-slate-400 outline-none resize-none leading-relaxed max-h-40 py-0.5"
             disabled={isLoading}
           />
-          <div className="flex items-center gap-1 shrink-0">
+          <div className="flex items-center gap-1 shrink-0" data-tour="send-btn">
             <VoiceMode
               messages={messages}
               status={status}
@@ -738,7 +746,7 @@ export default function ChatWindow({
           </div>
 
           {/* Suggestion chips */}
-          <div className="flex flex-wrap justify-center gap-2 mb-6">
+          <div data-tour="suggestion-chips" className="flex flex-wrap justify-center gap-2 mb-6">
             {CAPABILITIES.flatMap((cap) => cap.prompts.slice(0, 1)).map((prompt) => (
               <button
                 key={prompt}
