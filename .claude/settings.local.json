@@ -12,7 +12,9 @@
       "Bash(npm show:*)",
       "Bash(npx tsc:*)",
       "Bash(rm:*)",
-      "mcp__ide__getDiagnostics"
+      "mcp__ide__getDiagnostics",
+      "Bash(node -e \":*)",
+      "WebFetch(domain:commons.wikimedia.org)"
     ]
   }
 }

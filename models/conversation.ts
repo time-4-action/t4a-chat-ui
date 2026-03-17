@@ -10,6 +10,8 @@ const MessageSchema = new Schema({
   role: { type: String, enum: ["user", "assistant"], required: true },
   content: { type: String, required: true },
   files: { type: [MessageFileSchema], default: [] },
+  // Full UIMessage parts JSON — enables proper history reconstruction (email cards, tool results)
+  parts: { type: Schema.Types.Mixed, default: null },
   createdAt: { type: Date, default: Date.now },
 });
 

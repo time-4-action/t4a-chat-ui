@@ -1,6 +1,7 @@
 import { auth0 } from "@/lib/auth";
 import { connectDB } from "@/lib/mongodb";
 import { UserUsage } from "@/models/user-usage";
+import { UserLimit } from "@/models/user-limit";
 import { NextResponse } from "next/server";
 
 export async function GET() {
@@ -9,7 +10,10 @@ export async function GET() {
 
   await connectDB();
 
-  const rows = await UserUsage.find({ userId: session.user.sub }).lean();
+  const [rows, limitDoc] = await Promise.all([
+    UserUsage.find({ userId: session.user.sub }).lean(),
+    UserLimit.findOne({ userId: session.user.sub }).lean(),
+  ]);
 
   const totalCostUsd = rows.reduce((sum, r) => sum + (r.totalCostUsd ?? 0), 0);
   const conversationCount = rows.reduce((sum, r) => sum + (r.conversationCount ?? 0), 0);
@@ -23,5 +27,14 @@ export async function GET() {
     totalCostUsd: r.totalCostUsd,
   }));
 
-  return NextResponse.json({ totalCostUsd, conversationCount, byModel });
+  const limit = limitDoc
+    ? {
+        limitUsd: limitDoc.limitUsd,
+        period: limitDoc.period,
+        currentSpendUsd: limitDoc.currentSpendUsd,
+        periodStart: limitDoc.periodStart,
+      }
+    : null;
+
+  return NextResponse.json({ totalCostUsd, conversationCount, byModel, limit });
 }

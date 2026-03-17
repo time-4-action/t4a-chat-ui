@@ -2,6 +2,7 @@ import { auth0 } from "@/lib/auth";
 import { connectDB } from "@/lib/mongodb";
 import { Conversation } from "@/models/conversation";
 import { UserUsage } from "@/models/user-usage";
+import { UserLimit } from "@/models/user-limit";
 import { UserPreference } from "@/models/user-preference";
 import { UserMemory } from "@/models/user-memory";
 import { UserTone } from "@/models/user-tone";
@@ -11,6 +12,8 @@ import { createMCPClient } from "@ai-sdk/mcp";
 import { streamText, generateText, stepCountIs, convertToModelMessages, UIMessage, ToolSet } from "ai";
 import { NextRequest, NextResponse } from "next/server";
 import { DEFAULT_MODEL, ModelId, MODEL_CONFIGS, calculateRequestCost } from "@/lib/models";
+import { getGmailAccessToken } from "@/lib/gmail-token";
+import { buildGmailTools } from "@/lib/gmail-tools";
 
 const anthropic = createAnthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 const openai = createOpenAI({ apiKey: process.env.OPENAI_API_KEY });
@@ -41,6 +44,40 @@ function htmlToMarkdown(html: string): string {
     .replace(/\n{3,}/g, "\n\n")
     .trim();
 }
+
+// ─── Cost-limit helpers ────────────────────────────────────────────────────
+
+function getPeriodStart(period: string, now: Date): Date {
+  const d = new Date(now);
+  if (period === "daily") {
+    d.setHours(0, 0, 0, 0);
+    return d;
+  }
+  if (period === "weekly") {
+    const day = d.getDay(); // 0=Sun
+    d.setDate(d.getDate() - day);
+    d.setHours(0, 0, 0, 0);
+    return d;
+  }
+  if (period === "monthly") {
+    d.setDate(1);
+    d.setHours(0, 0, 0, 0);
+    return d;
+  }
+  // total — period never resets; use epoch as fixed start
+  return new Date(0);
+}
+
+function getNextReset(period: string, periodStart: Date): Date | null {
+  if (period === "total") return null;
+  const d = new Date(periodStart);
+  if (period === "daily")   { d.setDate(d.getDate() + 1); return d; }
+  if (period === "weekly")  { d.setDate(d.getDate() + 7); return d; }
+  if (period === "monthly") { d.setMonth(d.getMonth() + 1); return d; }
+  return null;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 
 const BASE_SYSTEM_PROMPT = `You are the time-4-action AI assistant. You help the team with product information, orders, and internal tasks. You have access to company tools — always use them when asked about products, orders, or customer data.
 
@@ -356,6 +393,35 @@ export async function POST(req: NextRequest) {
   const isAnthropicModel = MODEL_CONFIGS[modelId].provider === "anthropic";
 
   await connectDB();
+
+  // ── Cost limit check ─────────────────────────────────────────────────────
+  const userLimit = await UserLimit.findOne({ userId: session.user.sub });
+  if (userLimit) {
+    const now = new Date();
+    const expectedStart = getPeriodStart(userLimit.period, now);
+    if (userLimit.periodStart < expectedStart) {
+      await UserLimit.updateOne(
+        { userId: session.user.sub },
+        { $set: { currentSpendUsd: 0, periodStart: expectedStart, updatedAt: now } }
+      );
+      userLimit.currentSpendUsd = 0;
+    }
+    if (userLimit.currentSpendUsd >= userLimit.limitUsd) {
+      const nextReset = getNextReset(userLimit.period, userLimit.periodStart);
+      return NextResponse.json(
+        {
+          error: "limit_exceeded",
+          limitUsd: userLimit.limitUsd,
+          currentSpendUsd: userLimit.currentSpendUsd,
+          period: userLimit.period,
+          resetAt: nextReset ?? null,
+        },
+        { status: 429 }
+      );
+    }
+  }
+  // ────────────────────────────────────────────────────────────────────────
+
   const userPrefs = await UserPreference.findOne({ userId: session.user.sub });
   const promptCachingEnabled = userPrefs?.promptCaching !== false;
 
@@ -383,7 +449,7 @@ export async function POST(req: NextRequest) {
     });
 
   const basePrompt = await buildSystemPrompt(session.user.sub, toneId);
-  const systemPrompt = mode && MODE_PROMPTS[mode]
+  const systemPromptBase = mode && MODE_PROMPTS[mode]
     ? MODE_PROMPTS[mode] + basePrompt
     : basePrompt;
 
@@ -410,16 +476,51 @@ export async function POST(req: NextRequest) {
     }
   }
 
+  // Gmail tools — injected directly when the user has Gmail connected
+  let gmailMcpClient: { close: () => Promise<void> } | null = null; // kept for close() calls below (no-op now)
+  let gmailEnabled = false;
+  try {
+    const gmailAccessToken = await getGmailAccessToken(session.user.sub);
+    if (gmailAccessToken) {
+      const gmailTools = buildGmailTools(gmailAccessToken);
+      mcpTools = { ...mcpTools, ...gmailTools };
+      gmailEnabled = true;
+    }
+  } catch (err) {
+    console.warn("[chat] Gmail tools unavailable:", (err as Error).message);
+  }
+
+  const gmailPromptSection = gmailEnabled
+    ? `\n\n## Gmail
+
+You have access to the user's Gmail via: gmail_search_messages, gmail_read_message, gmail_read_thread, gmail_list_labels, gmail_create_draft, gmail_get_profile, gmail_download_attachment.
+Always use these tools when the user asks about email, inbox, messages, or wants to draft/send.
+Never say you lack email access.
+
+### MANDATORY workflow — you MUST follow this exact sequence for every email query:
+
+**Step 1 — Search:** Call gmail_search_messages to find relevant message IDs.
+**Step 2 — Read (REQUIRED, NO EXCEPTIONS):** For EVERY message from step 1, call gmail_read_message immediately. You MUST call this tool — never skip it, never summarize from search metadata alone, never answer before calling gmail_read_message. The search result has NO body content.
+**Step 3 — Thread:** Call gmail_read_thread using the threadId from gmail_read_message.
+**Step 4 — Attachments:** If gmail_read_message lists any attachments, call gmail_download_attachment for each one in parallel.
+**Step 5 — Respond:** Only after completing all tool calls above, write your final response.
+
+CRITICAL: Never respond with email content without first calling gmail_read_message. The search tool returns NO body/content. If you skip gmail_read_message you are fabricating content.`
+    : "";
+
+  const systemPrompt = systemPromptBase + gmailPromptSection;
+
   try {
     const result = streamText({
       model: getModel(modelId),
       system: systemPrompt,
       messages,
-      stopWhen: stepCountIs(5),
+      stopWhen: stepCountIs(10),
       ...(Object.keys(mcpTools).length > 0 && { tools: mcpTools }),
-      onFinish: async ({ text, totalUsage }) => {
+      onFinish: async ({ text, totalUsage, steps }) => {
         console.log("[chat] totalUsage:", JSON.stringify(totalUsage));
         await mcpClient?.close();
+        await gmailMcpClient?.close();
 
         // Memory update — only when there's actual text exchange
         if (text && lastUserText) {
@@ -453,12 +554,42 @@ export async function POST(req: NextRequest) {
             { $inc: { totalCostUsd: reqCost, conversationCount: isFirst ? 1 : 0, inputTokens: noCacheInputTokens, outputTokens, cacheReadTokens, cacheCreationTokens: cacheWriteTokens } },
             { upsert: true }
           );
+          if (reqCost > 0) {
+            await UserLimit.updateOne(
+              { userId: session.user.sub },
+              { $inc: { currentSpendUsd: reqCost }, $set: { updatedAt: new Date() } }
+            );
+          }
+          // Reconstruct full UIMessage parts from steps for proper history rendering
+          const assistantParts: any[] = [];
+          for (const step of steps) {
+            assistantParts.push({ type: "step-start" });
+            for (const call of (step as any).toolCalls ?? []) {
+              const result = ((step as any).toolResults ?? []).find((r: any) => r.toolCallId === call.toolCallId);
+              assistantParts.push({
+                type: `tool-${call.toolName}`,
+                toolCallId: call.toolCallId,
+                state: result ? "output-available" : "input-available",
+                input: call.input,
+                ...(result ? { output: result.output } : {}),
+              });
+            }
+            if ((step as any).text) {
+              assistantParts.push({ type: "text", text: (step as any).text, state: "done" });
+            }
+          }
+
+          const userParts: any[] = [
+            ...lastUserFiles.map((f) => ({ type: "file", mediaType: f.mediaType, filename: f.filename, url: f.url })),
+            { type: "text", text: lastUserText, state: "done" },
+          ];
+
           await Conversation.findByIdAndUpdate(conversationId, {
             $push: {
               messages: {
                 $each: [
-                  { role: "user", content: lastUserText, files: lastUserFiles },
-                  { role: "assistant", content: text },
+                  { role: "user", content: lastUserText, files: lastUserFiles, parts: userParts },
+                  { role: "assistant", content: text, parts: assistantParts },
                 ],
               },
             },
@@ -476,6 +607,7 @@ export async function POST(req: NextRequest) {
     return result.toUIMessageStreamResponse();
   } catch (err: any) {
     await mcpClient?.close();
+    await gmailMcpClient?.close();
 
     const lastErr = err?.lastError ?? err;
     const statusCode: number = lastErr?.statusCode ?? 500;

@@ -11,6 +11,7 @@ interface UsageData {
   totalCostUsd: number;
   conversationCount: number;
   byModel: { modelId: string; conversationCount: number; inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheCreationTokens: number; totalCostUsd: number }[];
+  limit: { limitUsd: number; period: string; currentSpendUsd: number; periodStart: string } | null;
 }
 
 interface Memory {
@@ -73,14 +74,15 @@ const defaultPrefs: Preferences = {
 };
 
 const NAV = [
-  { id: "profile",       label: "Profile" },
-  { id: "communication", label: "Communication" },
-  { id: "email",         label: "Email style" },
-  { id: "instructions",  label: "Instructions" },
-  { id: "tones",         label: "Tones" },
-  { id: "memory",        label: "Memory" },
-  { id: "usage",         label: "Usage" },
-  { id: "advanced",      label: "Advanced" },
+  { id: "profile",        label: "Profile" },
+  { id: "communication",  label: "Communication" },
+  { id: "email",          label: "Email style" },
+  { id: "instructions",   label: "Instructions" },
+  { id: "tones",          label: "Tones" },
+  { id: "memory",         label: "Memory" },
+  { id: "integrations",   label: "Integrations" },
+  { id: "usage",          label: "Usage" },
+  { id: "advanced",       label: "Advanced" },
 ];
 
 export default function SettingsPage() {
@@ -107,6 +109,11 @@ export default function SettingsPage() {
   const [deletingTone, setDeletingTone] = useState<string | null>(null);
   const [cachingWarnPending, setCachingWarnPending] = useState(false);
   const [openToneMenuId, setOpenToneMenuId] = useState<string | null>(null);
+  const [gmailStatus, setGmailStatus] = useState<{ connected: boolean; email?: string; connectedAt?: string } | null>(null);
+  const [gmailConnecting, setGmailConnecting] = useState(false);
+  const [gmailDisconnecting, setGmailDisconnecting] = useState(false);
+  const [gmailMsg, setGmailMsg] = useState<{ type: "success" | "error"; text: string } | null>(null);
+  const [mcpStatus, setMcpStatus] = useState<{ connected: boolean } | null>(null);
 
   function navigate(id: string) {
     setActiveSection(id);
@@ -142,6 +149,37 @@ export default function SettingsPage() {
       .then((r) => r.json())
       .then((d) => { setUsage(d); setUsageLoading(false); })
       .catch(() => setUsageLoading(false));
+
+    fetch("/api/gmail/status").then((r) => r.json()).then((data) => {
+      setGmailStatus(data);
+    }).catch(console.error);
+
+    fetch("/api/mcp/status").then((r) => r.json()).then((data) => {
+      setMcpStatus(data);
+    }).catch(console.error);
+
+    // Handle redirect back from Google OAuth or direct section links
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("section")) {
+      setActiveSection(params.get("section")!);
+      window.history.replaceState({}, "", "/settings");
+    }
+    if (params.get("gmailConnected") === "true") {
+      setActiveSection("integrations");
+      setGmailMsg({ type: "success", text: "Gmail connected successfully." });
+      window.history.replaceState({}, "", "/settings");
+    } else if (params.get("gmailError")) {
+      const errMap: Record<string, string> = {
+        access_denied: "Gmail connection was cancelled.",
+        invalid_state: "OAuth state mismatch — please try again.",
+        token_exchange_failed: "Failed to exchange authorization code. Please try again.",
+        no_refresh_token: "No refresh token received. Revoke app access in your Google account and try again.",
+        not_configured: "Gmail integration is not configured on this server.",
+      };
+      setActiveSection("integrations");
+      setGmailMsg({ type: "error", text: errMap[params.get("gmailError")!] ?? "Gmail connection failed." });
+      window.history.replaceState({}, "", "/settings");
+    }
   }, []);
 
   async function handleAutofill(section: AutofillSection, extra?: AutofillExtra) {
@@ -224,6 +262,24 @@ export default function SettingsPage() {
     }
   }
 
+  async function handleGmailDisconnect() {
+    setGmailDisconnecting(true);
+    setGmailMsg(null);
+    try {
+      const res = await fetch("/api/gmail/disconnect", { method: "DELETE" });
+      if (res.ok) {
+        setGmailStatus({ connected: false });
+        setGmailMsg({ type: "success", text: "Gmail disconnected." });
+      } else {
+        setGmailMsg({ type: "error", text: "Failed to disconnect Gmail. Please try again." });
+      }
+    } catch {
+      setGmailMsg({ type: "error", text: "Failed to disconnect Gmail. Please try again." });
+    }
+    setGmailDisconnecting(false);
+    setTimeout(() => setGmailMsg(null), 4000);
+  }
+
   async function clearMemorySection(section: keyof Omit<Memory, "updatedAt">) {
     setMemory((prev) => ({ ...prev, [section]: "" }));
     await fetch("/api/memory", {
@@ -285,11 +341,11 @@ export default function SettingsPage() {
         </a>
         <span className="text-gray-200 hidden sm:inline">/</span>
         <span className="text-sm font-semibold text-gray-800">
-          {activeSection === "memory" ? "Memory" : activeSection === "advanced" ? "Advanced" : "Settings"}
+          {activeSection === "memory" ? "Memory" : activeSection === "advanced" ? "Advanced" : activeSection === "integrations" ? "Integrations" : "Settings"}
         </span>
 
         <div className="ml-auto flex items-center gap-3">
-          {activeSection !== "memory" && activeSection !== "advanced" && (
+          {activeSection !== "memory" && activeSection !== "advanced" && activeSection !== "integrations" && (
             <>
               {saveState === "saved" && (
                 <span className="text-xs text-emerald-600 font-medium flex items-center gap-1.5">
@@ -366,7 +422,7 @@ export default function SettingsPage() {
           <div className="max-w-2xl mx-auto px-4 sm:px-6 pt-6 sm:pt-10 pb-16 space-y-4">
 
             {/* Profile */}
-            {activeSection !== "memory" && activeSection !== "advanced" && (
+            {activeSection !== "memory" && activeSection !== "advanced" && activeSection !== "integrations" && (
               <Card id="profile" title="Profile" description="Your identity used to personalise AI responses."
                 action={<AutofillButton loading={!!autofilling.profile} onClick={() => setModalSection("profile")} />}
               >
@@ -396,7 +452,7 @@ export default function SettingsPage() {
             )}
 
             {/* Communication */}
-            {activeSection !== "memory" && activeSection !== "advanced" && (
+            {activeSection !== "memory" && activeSection !== "advanced" && activeSection !== "integrations" && (
             <Card id="communication" title="Communication" description="How the AI should speak and write on your behalf."
               action={<AutofillButton loading={!!autofilling.communication} onClick={() => setModalSection("communication")} />}
             >
@@ -433,7 +489,7 @@ export default function SettingsPage() {
             )}
 
             {/* Email style */}
-            {activeSection !== "memory" && activeSection !== "advanced" && (
+            {activeSection !== "memory" && activeSection !== "advanced" && activeSection !== "integrations" && (
             <Card id="email" title="Email style examples" description="Paste 1–3 of your typical emails so the AI can mirror your writing style."
               action={<AutofillButton loading={!!autofilling.email} onClick={() => setModalSection("email")} />}
             >
@@ -448,7 +504,7 @@ export default function SettingsPage() {
             )}
 
             {/* Custom instructions */}
-            {activeSection !== "memory" && activeSection !== "advanced" && (
+            {activeSection !== "memory" && activeSection !== "advanced" && activeSection !== "integrations" && (
             <Card id="instructions" title="Custom instructions" description="Specific rules the AI should always follow, regardless of context.">
               <textarea
                 value={prefs.customInstructions}
@@ -458,6 +514,181 @@ export default function SettingsPage() {
                 className={`${inp} resize-none`}
               />
             </Card>
+            )}
+
+            {/* Integrations — standalone view */}
+            {activeSection === "integrations" && (
+            <section id="integrations" className="bg-white rounded-2xl border border-gray-100 overflow-hidden">
+              <div className="px-4 sm:px-6 pt-5 pb-4 border-b border-gray-100">
+                <h2 className="text-sm font-semibold text-gray-900">Integrations</h2>
+                <p className="text-xs text-gray-400 mt-0.5">Connect external services so the AI can act on your behalf.</p>
+              </div>
+
+              <div className="px-4 sm:px-6 py-5 space-y-4">
+
+                {/* Gmail card */}
+                <div className={`flex rounded-xl border bg-white shadow-sm ring-1 ring-gray-100 overflow-hidden transition-all ${gmailStatus?.connected ? "border-emerald-100" : "border-gray-100"}`}>
+                  {/* Left accent bar */}
+                  <div className={`w-1 shrink-0 rounded-l-xl ${gmailStatus?.connected ? "bg-emerald-500" : "bg-gray-100"}`} />
+
+                  <div className="flex-1 px-4 py-4">
+                    <div className="flex items-start justify-between gap-4">
+                      <div className="flex items-start gap-3">
+                        {/* Gmail 2020 icon */}
+                        <div className="mt-0.5 shrink-0 w-9 h-9 rounded-lg bg-white border border-gray-100 shadow-sm flex items-center justify-center">
+                          <svg viewBox="52 42 88 66" className="w-5 h-5" xmlns="http://www.w3.org/2000/svg">
+                            <path fill="#4285f4" d="M58 108h14V74L52 59v43c0 3.32 2.69 6 6 6"/>
+                            <path fill="#34a853" d="M120 108h14c3.32 0 6-2.69 6-6V59l-20 15"/>
+                            <path fill="#fbbc04" d="M120 48v26l20-15v-8c0-7.42-8.47-11.65-14.4-7.2"/>
+                            <path fill="#ea4335" d="M72 74V48l24 18 24-18v26L96 92"/>
+                            <path fill="#c5221f" d="M52 51v8l20 15V48l-5.6-4.2C60.47 39.35 52 43.58 52 51"/>
+                          </svg>
+                        </div>
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <p className="text-sm font-semibold text-gray-800">Gmail</p>
+                            {gmailStatus?.connected && (
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-50 border border-emerald-100 text-[10px] font-semibold text-emerald-700">
+                                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 inline-block" />
+                                Connected
+                              </span>
+                            )}
+                          </div>
+                          {gmailStatus?.connected ? (
+                            <div className="mt-1.5 flex flex-col gap-1">
+                              <span className="inline-flex items-center px-2 py-0.5 rounded-md bg-gray-100 text-[11px] font-mono text-gray-600 w-fit">
+                                {gmailStatus.email}
+                              </span>
+                              {gmailStatus.connectedAt && (
+                                <p className="text-[10px] text-gray-400">
+                                  Connected {new Date(gmailStatus.connectedAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
+                                </p>
+                              )}
+                            </div>
+                          ) : (
+                            <p className="text-xs text-gray-400 mt-0.5">
+                              Allow the AI to read and draft emails on your behalf.
+                            </p>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="shrink-0">
+                        {gmailStatus === null ? (
+                          <div className="h-8 w-20 rounded-lg bg-gray-200 animate-pulse" />
+                        ) : gmailStatus.connected ? (
+                          <button
+                            onClick={handleGmailDisconnect}
+                            disabled={gmailDisconnecting}
+                            className="px-3.5 py-1.5 rounded-lg border border-gray-200 text-xs font-medium text-gray-600 hover:bg-red-50 hover:border-red-200 hover:text-red-500 transition-colors disabled:opacity-50 cursor-pointer disabled:cursor-not-allowed"
+                          >
+                            {gmailDisconnecting ? "Disconnecting…" : "Disconnect"}
+                          </button>
+                        ) : (
+                          <a
+                            href="/api/gmail/connect"
+                            onClick={() => setGmailConnecting(true)}
+                            className={`inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-gray-900 hover:bg-gray-800 text-white text-xs font-semibold transition-colors ${gmailConnecting ? "opacity-60 pointer-events-none" : ""}`}
+                          >
+                            {gmailConnecting ? "Connecting…" : "Connect"}
+                          </a>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Success/error message */}
+                    {gmailMsg && (
+                      <div className={`mt-3 flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-medium ${
+                        gmailMsg.type === "success"
+                          ? "bg-emerald-50 border border-emerald-100 text-emerald-700"
+                          : "bg-red-50 border border-red-100 text-red-600"
+                      }`}>
+                        {gmailMsg.type === "success" ? (
+                          <svg className="w-3.5 h-3.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                          </svg>
+                        ) : (
+                          <svg className="w-3.5 h-3.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
+                          </svg>
+                        )}
+                        {gmailMsg.text}
+                      </div>
+                    )}
+
+                    {/* Permissions chips */}
+                    {gmailStatus?.connected && (
+                      <div className="mt-3 pt-3 border-t border-gray-50">
+                        <div className="flex flex-wrap gap-1.5 mb-2">
+                          {["Read emails", "Search", "Threads", "Create drafts"].map((perm) => (
+                            <span key={perm} className="px-2 py-0.5 rounded-md bg-gray-100 text-[10px] font-medium text-gray-500">
+                              {perm}
+                            </span>
+                          ))}
+                        </div>
+                        <p className="text-[10px] text-gray-400">
+                          To revoke access manually, visit{" "}
+                          <a href="https://myaccount.google.com/permissions" target="_blank" rel="noopener noreferrer" className="underline hover:text-gray-600">
+                            Google account permissions
+                          </a>.
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* MCP / Internal Tools card */}
+                <div className={`flex rounded-xl border bg-white shadow-sm ring-1 ring-gray-100 overflow-hidden transition-all ${mcpStatus?.connected ? "border-blue-100" : "border-gray-100"}`}>
+                  {/* Left accent bar */}
+                  <div className={`w-1 shrink-0 rounded-l-xl ${mcpStatus?.connected ? "bg-blue-500" : "bg-gray-100"}`} />
+
+                  <div className="flex-1 px-4 py-4">
+                    <div className="flex items-start justify-between gap-4">
+                      <div className="flex items-start gap-3">
+                        {/* Tools icon */}
+                        <div className="mt-0.5 shrink-0 w-9 h-9 rounded-lg border border-gray-100 shadow-sm flex items-center justify-center"
+                          style={{ background: "linear-gradient(135deg, #f0f4ff 0%, #e8eeff 100%)" }}>
+                          <svg viewBox="0 0 24 24" className="w-5 h-5" fill="none" xmlns="http://www.w3.org/2000/svg">
+                            <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z" stroke={process.env.NEXT_PUBLIC_COMPANY_COLOR || "#3B82F6"} strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"/>
+                          </svg>
+                        </div>
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <p className="text-sm font-semibold text-gray-800">Internal Tools</p>
+                            {mcpStatus === null ? (
+                              <div className="h-4 w-16 rounded-full bg-gray-200 animate-pulse" />
+                            ) : mcpStatus.connected ? (
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-blue-50 border border-blue-100 text-[10px] font-semibold text-blue-700">
+                                <span className="w-1.5 h-1.5 rounded-full bg-blue-500 inline-block" />
+                                Available
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-gray-50 border border-gray-200 text-[10px] font-medium text-gray-400">
+                                Not configured
+                              </span>
+                            )}
+                          </div>
+                          <p className="text-xs text-gray-400 mt-0.5">
+                            {mcpStatus?.connected
+                              ? "Company knowledge base and internal tools are active."
+                              : "Access to company data, workflows, and internal systems."}
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+
+                    {!mcpStatus?.connected && mcpStatus !== null && (
+                      <div className="mt-3 pt-3 border-t border-gray-50">
+                        <p className="text-[10px] text-gray-400">
+                          Internal tools are configured by your server administrator via the <code className="px-1 py-0.5 bg-gray-100 rounded text-[10px] font-mono">MCP_SERVER_URL</code> environment variable.
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+              </div>
+            </section>
             )}
 
             {/* Advanced — standalone view, same pattern as Memory */}
@@ -577,7 +808,7 @@ export default function SettingsPage() {
             )}
 
             {/* Tones */}
-            {activeSection !== "memory" && activeSection !== "advanced" && (
+            {activeSection !== "memory" && activeSection !== "advanced" && activeSection !== "integrations" && (
             <section id="tones" className="bg-white rounded-2xl border border-gray-100 overflow-hidden">
               <div className="px-4 sm:px-6 pt-5 pb-4 border-b border-gray-100 flex items-start justify-between gap-4">
                 <div>
@@ -855,7 +1086,7 @@ export default function SettingsPage() {
             )}
 
             {/* Usage */}
-            {activeSection !== "memory" && activeSection !== "advanced" && (
+            {activeSection !== "memory" && activeSection !== "advanced" && activeSection !== "integrations" && (
             <Card id="usage" title="Usage" description="Your API usage and cost overview.">
               {usageLoading ? (
                 <div className="flex gap-3">
@@ -866,6 +1097,57 @@ export default function SettingsPage() {
                 <p className="text-sm text-gray-400 italic">Failed to load usage data.</p>
               ) : (
                 <div className="space-y-4">
+                  {/* Spending limit */}
+                  {(() => {
+                    if (!usage.limit) {
+                      return (
+                        <div className="rounded-xl border border-gray-100 bg-gray-50 px-4 py-3 flex items-center justify-between">
+                          <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-widest">Spending limit</p>
+                          <span className="text-xs font-medium text-gray-400">Unlimited</span>
+                        </div>
+                      );
+                    }
+                    const { limitUsd, period, currentSpendUsd, periodStart } = usage.limit;
+                    const remaining = Math.max(limitUsd - currentSpendUsd, 0);
+                    const pct = limitUsd > 0 ? Math.min((currentSpendUsd / limitUsd) * 100, 100) : 0;
+                    const barColor = pct >= 100 ? "bg-red-500" : pct >= 90 ? "bg-red-400" : pct >= 70 ? "bg-amber-400" : "bg-emerald-500";
+                    const periodLabels: Record<string, string> = { daily: "Daily", weekly: "Weekly", monthly: "Monthly", total: "Total" };
+                    const nextReset: Date | null = (() => {
+                      const d = new Date(periodStart);
+                      if (period === "daily")   { d.setDate(d.getDate() + 1); return d; }
+                      if (period === "weekly")  { d.setDate(d.getDate() + 7); return d; }
+                      if (period === "monthly") { d.setMonth(d.getMonth() + 1); return d; }
+                      return null;
+                    })();
+                    return (
+                      <div className="rounded-xl border border-gray-100 bg-gray-50 px-4 py-3 space-y-2">
+                        <div className="flex items-center justify-between">
+                          <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-widest">
+                            {periodLabels[period] ?? period} spending limit
+                          </p>
+                          <span className="text-xs font-semibold text-gray-700">
+                            {formatCost(currentSpendUsd)} <span className="font-normal text-gray-400">/ {formatCost(limitUsd)}</span>
+                          </span>
+                        </div>
+                        <div className="h-2 rounded-full bg-gray-200 overflow-hidden">
+                          <div className={`h-full rounded-full transition-all ${barColor}`} style={{ width: `${pct}%` }} />
+                        </div>
+                        <div className="flex items-center justify-between">
+                          <p className="text-[11px] text-gray-400">
+                            {pct >= 100
+                              ? "Limit reached — messaging is paused until the period resets."
+                              : nextReset
+                              ? `Resets ${nextReset.toLocaleDateString("en-US", { month: "short", day: "numeric" })}`
+                              : "This limit does not reset."}
+                          </p>
+                          {pct < 100 && (
+                            <p className="text-[11px] text-gray-500 font-medium">{formatCost(remaining)} remaining</p>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })()}
+
                   <div className="flex gap-3">
                     <div className="flex-1 rounded-xl bg-gray-50 border border-gray-100 px-4 py-3">
                       <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-widest mb-1">Total cost</p>
@@ -1118,6 +1400,7 @@ function NavIcon({ id, active }: { id: string; active: boolean }) {
   if (id === "tones")         return <svg className={cls} {...s}><path strokeLinecap="round" strokeLinejoin="round" d="M7 21a4 4 0 01-4-4V5a2 2 0 012-2h4a2 2 0 012 2v12a4 4 0 01-4 4zm0 0h12a2 2 0 002-2v-4a2 2 0 00-2-2h-2.343M11 7.343l1.657-1.657a2 2 0 012.828 0l2.829 2.829a2 2 0 010 2.828l-8.486 8.485M7 17h.01" /></svg>;
   if (id === "memory")        return <svg className={cls} {...s}><path strokeLinecap="round" strokeLinejoin="round" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" /></svg>;
   if (id === "usage")         return <svg className={cls} {...s}><path strokeLinecap="round" strokeLinejoin="round" d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z" /></svg>;
+  if (id === "integrations")  return <svg className={cls} {...s}><path strokeLinecap="round" strokeLinejoin="round" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" /></svg>;
   if (id === "advanced")      return <svg className={cls} {...s}><path strokeLinecap="round" strokeLinejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" /><path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>;
   return null;
 }

@@ -1,11 +1,18 @@
 import { UIMessage } from "ai";
-import { Check, Copy, Mail } from "lucide-react";
+import { Check, Copy, Download, Mail } from "lucide-react";
 import { useCallback, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import SyntaxHighlighter from "react-syntax-highlighter";
 import { githubGist } from "react-syntax-highlighter/dist/esm/styles/hljs";
 import remarkGfm from "remark-gfm";
 import EmailCard, { parseEmailFromText } from "./email-card";
+import type { PreviewFile } from "./file-preview-panel";
+import GmailEmailCard, {
+  type ProcessedGmailEmail,
+  type GmailReadMessageResult,
+  type GmailReadThreadResult,
+  type GmailDownloadResult,
+} from "./gmail-email-card";
 
 // hljs languages supported by react-syntax-highlighter
 const HLJS_LANGUAGES = new Set([
@@ -204,6 +211,100 @@ const isEmailInProgress = (text: string) =>
 
 type FilePart = { type: "file"; mediaType: string; filename?: string; url: string };
 
+interface GmailAttachmentResult {
+  filename: string;
+  mimeType: string;
+  size: number;
+  downloadUrl: string;
+}
+
+function formatAttachmentSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function GmailAttachment({
+  attachment,
+  onFilePreview,
+}: {
+  attachment: GmailAttachmentResult;
+  onFilePreview?: (file: PreviewFile) => void;
+}) {
+  const isImage = attachment.mimeType.startsWith("image/");
+  const isPdf = attachment.mimeType === "application/pdf" || attachment.filename.endsWith(".pdf");
+  const canPreview = isImage || isPdf;
+  const shortName = attachment.filename.length > 28
+    ? attachment.filename.slice(0, 25) + "…"
+    : attachment.filename;
+
+  const ext = attachment.filename.split(".").pop()?.toUpperCase() ?? "FILE";
+
+  // Shared chip content
+  const chipContent = (
+    <>
+      <div className="h-9 w-9 rounded-lg bg-blue-100 flex items-center justify-center shrink-0">
+        <span className="text-[10px] font-bold text-blue-700">{ext.slice(0, 4)}</span>
+      </div>
+      <div className="flex-1 min-w-0">
+        <p className="text-xs font-semibold text-slate-800 truncate leading-snug">{shortName}</p>
+        <p className="text-[10px] text-slate-400 mt-0.5">
+          {formatAttachmentSize(attachment.size)} · {canPreview ? "Click to preview" : "Click to download"}
+        </p>
+      </div>
+      <Download className="h-3.5 w-3.5 text-slate-400 group-hover:text-blue-600 transition-colors shrink-0" />
+    </>
+  );
+
+  const chipClass = "inline-flex items-center gap-2.5 my-2 bg-slate-50 border border-slate-200 rounded-xl px-3 py-2.5 hover:bg-slate-100 transition-colors group max-w-xs text-left";
+
+  if (isImage) {
+    return (
+      <div className="my-2 max-w-sm">
+        <button
+          type="button"
+          onClick={() => canPreview && onFilePreview
+            ? onFilePreview({ filename: attachment.filename, mediaType: attachment.mimeType, url: attachment.downloadUrl })
+            : undefined}
+          className="focus:outline-none block"
+        >
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={attachment.downloadUrl}
+            alt={attachment.filename}
+            className="rounded-xl border border-slate-200 shadow-sm max-h-72 object-contain hover:opacity-90 transition-opacity cursor-zoom-in"
+          />
+        </button>
+        <p className="text-[11px] text-slate-400 mt-1 pl-0.5">{attachment.filename} · {formatAttachmentSize(attachment.size)}</p>
+      </div>
+    );
+  }
+
+  // Previewable (PDF): intercept click to open panel
+  if (canPreview && onFilePreview) {
+    return (
+      <button
+        type="button"
+        onClick={() => onFilePreview({ filename: attachment.filename, mediaType: attachment.mimeType, url: attachment.downloadUrl })}
+        className={chipClass}
+      >
+        {chipContent}
+      </button>
+    );
+  }
+
+  // Non-previewable (STL, DOCX, ZIP, etc.): plain anchor → browser downloads it
+  return (
+    <a
+      href={attachment.downloadUrl}
+      download={attachment.filename}
+      className={chipClass}
+    >
+      {chipContent}
+    </a>
+  );
+}
+
 const EXT_CONFIG: Record<string, { label: string; bg: string }> = {
   pdf:  { label: "PDF", bg: "bg-red-500/20" },
   docx: { label: "DOC", bg: "bg-blue-500/20" },
@@ -220,7 +321,157 @@ function docChipConfig(fp: FilePart): { label: string; bg: string } {
   return EXT_CONFIG[ext] ?? { label: ext.slice(0, 3).toUpperCase() || "FILE", bg: "bg-white/10" };
 }
 
-export default function MessageBubble({ message, signatureHtml = "" }: { message: UIMessage; signatureHtml?: string }) {
+function extChipConfig(filename: string): { label: string; bg: string } {
+  const ext = filename.split(".").pop()?.toLowerCase() ?? "";
+  return EXT_CONFIG[ext] ?? { label: ext.slice(0, 3).toUpperCase() || "FILE", bg: "bg-white/10" };
+}
+
+interface FileBlock {
+  filename: string;
+  content: string;
+}
+
+function parseFileBlocks(text: string): { cleanText: string; blocks: FileBlock[] } {
+  const blocks: FileBlock[] = [];
+  // Match \n\n[File: name]\ncontent — content runs until next \n\n[File: or end
+  const pattern = /\n\n\[File: ([^\]]+)\]\n([\s\S]*?)(?=\n\n\[File: |$)/g;
+  const cleanText = text.replace(pattern, (_, filename, content) => {
+    blocks.push({ filename, content: content.trimEnd() });
+    return "";
+  });
+  return { cleanText: cleanText.trimEnd(), blocks };
+}
+
+function extractGmailAttachments(message: UIMessage): GmailAttachmentResult[] {
+  if (message.role !== "assistant") return [];
+
+  // Dump ALL parts unconditionally so we can see the real SDK structure
+  if (process.env.NODE_ENV === "development") {
+    console.log("[gmail-debug] assistant msg parts:", JSON.stringify(message.parts, null, 2));
+  }
+
+  const results: GmailAttachmentResult[] = [];
+
+  for (const p of message.parts as any[]) {
+    const toolName = getToolName(p);
+    if (toolName !== "gmail_download_attachment") continue;
+    const result = getToolResult(p);
+    if (result?.downloadUrl && result?.filename) {
+      results.push(result as GmailAttachmentResult);
+    }
+  }
+
+  return results;
+}
+
+function getToolResult(p: any): any {
+  // AI SDK v6: parts have type "tool-{toolName}" with output as raw object
+  if (typeof p.type === "string" && p.type.startsWith("tool-") && p.output != null) {
+    const out = p.output;
+    // Wrapped: { type: "json", value: ... }
+    if (out && typeof out === "object" && out.type === "json") return out.value;
+    if (out && typeof out === "object" && out.type === "text") {
+      try { return JSON.parse(out.value); } catch { return out.value; }
+    }
+    // Direct object (actual SDK behaviour observed)
+    return out;
+  }
+  // Fallback for older shapes
+  return p.result ?? p.toolInvocation?.result ??
+    (p.toolInvocation?.state === "result" ? p.toolInvocation.result : undefined);
+}
+
+function getToolName(p: any): string | undefined {
+  // AI SDK v6: tool name is embedded in type as "tool-{toolName}"
+  if (typeof p.type === "string" && p.type.startsWith("tool-")) {
+    return p.type.slice("tool-".length);
+  }
+  return p.toolName ?? p.toolInvocation?.toolName;
+}
+
+function extractGmailEmails(message: UIMessage): ProcessedGmailEmail[] {
+  if (message.role !== "assistant") return [];
+
+  const readMessages: GmailReadMessageResult[] = [];
+  const readThreads: GmailReadThreadResult[] = [];
+  const downloads: GmailDownloadResult[] = [];
+  let searchResults: any[] = [];
+
+  for (const p of message.parts as any[]) {
+    const toolName = getToolName(p);
+    const result = getToolResult(p);
+    if (!result || !toolName) continue;
+
+    if (process.env.NODE_ENV === "development") {
+      console.log(`[gmail-extract] tool="${toolName}" result keys:`, Object.keys(result));
+    }
+
+    if (toolName === "gmail_read_message" && (result.from || result.body || result.subject)) {
+      // Relax: don't require both id AND subject — either field is enough
+      readMessages.push({
+        id:          result.id ?? "",
+        threadId:    result.threadId ?? "",
+        subject:     result.subject ?? "(no subject)",
+        from:        result.from ?? "",
+        to:          result.to ?? "",
+        date:        result.date ?? "",
+        body:        result.body ?? result.snippet ?? "",
+        isHtml:      result.isHtml ?? false,
+        snippet:     result.snippet,
+        labels:      result.labels,
+        attachments: result.attachments,
+      });
+    } else if (toolName === "gmail_read_thread" && result.threadId) {
+      readThreads.push(result as GmailReadThreadResult);
+    } else if (toolName === "gmail_download_attachment" && result.downloadUrl) {
+      downloads.push(result as GmailDownloadResult);
+    } else if (toolName === "gmail_search_messages" && Array.isArray(result.results)) {
+      searchResults = result.results;
+    }
+  }
+
+  // Prefer full read_message results
+  if (readMessages.length > 0) {
+    return readMessages.map((msg) => {
+      const resolvedAttachments = (msg.attachments ?? [])
+        .map((a) => downloads.find((d) => d.filename === a.filename))
+        .filter(Boolean) as GmailDownloadResult[];
+      const thread = readThreads.find((t) => t.threadId === msg.threadId);
+      return { message: msg, resolvedAttachments, thread };
+    });
+  }
+
+  // Fallback: promote search result snippets to cards when AI skipped read_message
+  if (searchResults.length > 0) {
+    return searchResults.slice(0, 5).map((sr: any) => ({
+      message: {
+        id:          sr.id ?? "",
+        threadId:    sr.threadId ?? "",
+        subject:     sr.subject ?? "(no subject)",
+        from:        sr.from ?? "",
+        to:          "",
+        date:        sr.date ?? "",
+        body:        sr.snippet ?? "",
+        labels:      [],
+        attachments: [],
+      } as GmailReadMessageResult,
+      resolvedAttachments: [],
+      thread: undefined,
+    }));
+  }
+
+  return [];
+}
+
+export default function MessageBubble({
+  message,
+  signatureHtml = "",
+  onFilePreview,
+}: {
+  message: UIMessage;
+  signatureHtml?: string;
+  onFilePreview?: (file: PreviewFile) => void;
+}) {
   const isUser = message.role === "user";
 
   const textContent = message.parts
@@ -233,7 +484,11 @@ export default function MessageBubble({ message, signatureHtml = "" }: { message
   if (isUser) {
     const imageParts = fileParts.filter((fp) => fp.mediaType.startsWith("image/"));
     const docParts = fileParts.filter((fp) => !fp.mediaType.startsWith("image/"));
-    const hasContent = textContent.trim() || imageParts.length > 0 || docParts.length > 0;
+
+    // Parse [File: name]\ncontent blocks embedded in text (DOCX/XLSX/text uploads)
+    const { cleanText, blocks } = parseFileBlocks(textContent);
+
+    const hasContent = cleanText.trim() || imageParts.length > 0 || docParts.length > 0 || blocks.length > 0;
     if (!hasContent) return null;
 
     return (
@@ -243,19 +498,29 @@ export default function MessageBubble({ message, signatureHtml = "" }: { message
           {imageParts.length > 0 && (
             <div className={`flex gap-1.5 justify-end flex-wrap`}>
               {imageParts.map((fp, i) => (
-                <a key={i} href={fp.url} target="_blank" rel="noopener noreferrer" title={fp.filename}>
+                <button
+                  key={i}
+                  type="button"
+                  title={fp.filename ?? "image"}
+                  onClick={() =>
+                    onFilePreview
+                      ? onFilePreview({ filename: fp.filename ?? "image", mediaType: fp.mediaType, url: fp.url })
+                      : window.open(fp.url, "_blank")
+                  }
+                  className="focus:outline-none"
+                >
                   {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img
                     src={fp.url}
                     alt={fp.filename ?? "image"}
                     className="h-28 w-28 rounded-2xl rounded-tr-sm object-cover shadow-md border border-white/10 hover:opacity-90 transition-opacity cursor-zoom-in"
                   />
-                </a>
+                </button>
               ))}
             </div>
           )}
 
-          {/* Document chips — above the text bubble */}
+          {/* Document chips for file parts (PDFs) */}
           {docParts.length > 0 && (
             <div className="flex gap-1.5 justify-end flex-wrap">
               {docParts.map((fp, i) => {
@@ -264,21 +529,55 @@ export default function MessageBubble({ message, signatureHtml = "" }: { message
                   ? (fp.filename ?? "document").slice(0, 21) + "…"
                   : (fp.filename ?? "document");
                 return (
-                  <div key={i} className="flex items-center gap-2 bg-[#0f172a] border border-white/10 rounded-2xl rounded-tr-sm px-3 py-2 shadow-md">
+                  <button
+                    key={i}
+                    type="button"
+                    onClick={() =>
+                      onFilePreview?.({ filename: fp.filename ?? "document", mediaType: fp.mediaType, url: fp.url || undefined })
+                    }
+                    className="flex items-center gap-2 bg-[#0f172a] border border-white/10 rounded-2xl rounded-tr-sm px-3 py-2 shadow-md hover:border-white/30 hover:bg-slate-800 transition-colors"
+                  >
                     <div className={`h-8 w-8 rounded-lg flex items-center justify-center shrink-0 ${cfg.bg}`}>
                       <span className="text-[10px] font-bold text-white">{cfg.label}</span>
                     </div>
                     <span className="text-xs text-white/80 font-medium">{shortName}</span>
-                  </div>
+                  </button>
                 );
               })}
             </div>
           )}
 
-          {/* Text bubble */}
-          {textContent.trim() && (
+          {/* Parsed file block chips (DOCX/XLSX/text extracted text) */}
+          {blocks.length > 0 && (
+            <div className="flex gap-1.5 justify-end flex-wrap">
+              {blocks.map((block, i) => {
+                const cfg = extChipConfig(block.filename);
+                const shortName = block.filename.length > 24
+                  ? block.filename.slice(0, 21) + "…"
+                  : block.filename;
+                return (
+                  <button
+                    key={i}
+                    type="button"
+                    onClick={() =>
+                      onFilePreview?.({ filename: block.filename, mediaType: "text/plain", text: block.content })
+                    }
+                    className="flex items-center gap-2 bg-[#0f172a] border border-white/10 rounded-2xl rounded-tr-sm px-3 py-2 shadow-md hover:border-white/30 hover:bg-slate-800 transition-colors"
+                  >
+                    <div className={`h-8 w-8 rounded-lg flex items-center justify-center shrink-0 ${cfg.bg}`}>
+                      <span className="text-[10px] font-bold text-white">{cfg.label}</span>
+                    </div>
+                    <span className="text-xs text-white/80 font-medium">{shortName}</span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+
+          {/* Text bubble — stripped of embedded file blocks */}
+          {cleanText.trim() && (
             <div className="rounded-2xl rounded-tr-sm px-4 py-3 text-sm leading-relaxed whitespace-pre-wrap bg-[#0f172a] text-white shadow-md">
-              {textContent}
+              {cleanText}
             </div>
           )}
         </div>
@@ -350,6 +649,21 @@ export default function MessageBubble({ message, signatureHtml = "" }: { message
     );
   }
 
+  // Prefer the rich email card view when gmail_read_message was called
+  const gmailEmails = extractGmailEmails(message);
+  if (gmailEmails.length > 0) {
+    return (
+      <div className="w-full space-y-3">
+        {gmailEmails.map((email, i) => (
+          <GmailEmailCard key={i} email={email} onFilePreview={onFilePreview} />
+        ))}
+      </div>
+    );
+  }
+
+  // Fallback: old attachment-only chips (gmail_download_attachment without read_message)
+  const gmailAttachments = extractGmailAttachments(message);
+
   return (
     <div className="flex gap-3 items-start">
       {/* AI avatar */}
@@ -361,6 +675,13 @@ export default function MessageBubble({ message, signatureHtml = "" }: { message
 
       {/* Bubble */}
       <div className="max-w-[85%] sm:max-w-[78%] rounded-2xl rounded-tl-sm px-4 py-3 text-sm leading-relaxed bg-white shadow-sm border border-slate-200 text-slate-800">
+        {gmailAttachments.length > 0 && (
+          <div className="flex flex-col gap-1 mb-2">
+            {gmailAttachments.map((att, i) => (
+              <GmailAttachment key={i} attachment={att} onFilePreview={onFilePreview} />
+            ))}
+          </div>
+        )}
         <ReactMarkdown
           remarkPlugins={[remarkGfm]}
           components={{

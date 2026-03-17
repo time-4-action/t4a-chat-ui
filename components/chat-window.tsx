@@ -5,6 +5,7 @@ import { DefaultChatTransport, UIMessage, FileUIPart } from "ai";
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import MessageBubble from "./message-bubble";
 import ToolCallIndicator from "./tool-call-indicator";
+import FilePreviewPanel, { type PreviewFile } from "./file-preview-panel";
 import { CAPABILITIES } from "@/lib/capabilities";
 import VoiceMode from "./voice-mode";
 import ChatModeSelector, { ChatMode } from "./chat-mode-selector";
@@ -76,7 +77,7 @@ function isAcceptedFile(file: File) {
 
 // ─── File chip components ──────────────────────────────────────────────────
 
-function ImageChip({ attached, onRemove }: { attached: AttachedFile; onRemove: () => void }) {
+function ImageChip({ attached, onRemove, onPreview }: { attached: AttachedFile; onRemove: () => void; onPreview?: () => void }) {
   const shortName = attached.file.name.length > 20
     ? attached.file.name.slice(0, 17) + "…"
     : attached.file.name;
@@ -86,7 +87,8 @@ function ImageChip({ attached, onRemove }: { attached: AttachedFile; onRemove: (
       <img
         src={attached.previewUrl}
         alt={attached.file.name}
-        className="h-[72px] w-[72px] rounded-xl object-cover border border-slate-200 shadow-sm block"
+        onClick={onPreview}
+        className="h-[72px] w-[72px] rounded-xl object-cover border border-slate-200 shadow-sm block cursor-zoom-in"
       />
       {/* Filename overlay on hover */}
       <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/60 to-transparent rounded-b-xl px-1.5 py-1 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
@@ -105,14 +107,20 @@ function ImageChip({ attached, onRemove }: { attached: AttachedFile; onRemove: (
   );
 }
 
-function DocumentChip({ attached, onRemove }: { attached: AttachedFile; onRemove: () => void }) {
+function DocumentChip({ attached, onRemove, onPreview }: { attached: AttachedFile; onRemove: () => void; onPreview?: () => void }) {
   const ext = getFileExt(attached.file);
   const cfg = FILE_TYPE_CONFIG[ext] ?? { label: ext.slice(0, 3).toUpperCase(), iconBg: "bg-slate-100", iconText: "text-slate-600" };
   const shortName = attached.file.name.length > 26
     ? attached.file.name.slice(0, 23) + "…"
     : attached.file.name;
   return (
-    <div className="group relative flex items-center gap-2.5 bg-white border border-slate-200 rounded-xl pl-2.5 pr-2 py-2 shadow-sm shrink-0 w-[190px] hover:border-slate-300 hover:shadow-md transition-all">
+    <div
+      onClick={onPreview}
+      className={cn(
+        "group relative flex items-center gap-2.5 bg-white border border-slate-200 rounded-xl pl-2.5 pr-2 py-2 shadow-sm shrink-0 w-[190px] transition-all",
+        onPreview ? "cursor-pointer hover:border-blue-300 hover:shadow-md hover:bg-blue-50/30" : "hover:border-slate-300 hover:shadow-md"
+      )}
+    >
       {/* Type badge */}
       <div className={cn("h-10 w-10 rounded-lg flex items-center justify-center shrink-0", cfg.iconBg)}>
         <span className={cn("text-[11px] font-bold tracking-wide", cfg.iconText)}>{cfg.label}</span>
@@ -125,7 +133,7 @@ function DocumentChip({ attached, onRemove }: { attached: AttachedFile; onRemove
       {/* Remove */}
       <button
         type="button"
-        onClick={onRemove}
+        onClick={(e) => { e.stopPropagation(); onRemove(); }}
         className="shrink-0 h-5 w-5 rounded-full bg-slate-100 hover:bg-red-100 text-slate-400 hover:text-red-500 flex items-center justify-center transition-colors opacity-0 group-hover:opacity-100"
         aria-label={`Remove ${attached.file.name}`}
       >
@@ -135,16 +143,16 @@ function DocumentChip({ attached, onRemove }: { attached: AttachedFile; onRemove
   );
 }
 
-function FileChip({ attached, onRemove }: { attached: AttachedFile; onRemove: () => void }) {
+function FileChip({ attached, onRemove, onPreview }: { attached: AttachedFile; onRemove: () => void; onPreview?: () => void }) {
   return attached.previewUrl
-    ? <ImageChip attached={attached} onRemove={onRemove} />
-    : <DocumentChip attached={attached} onRemove={onRemove} />;
+    ? <ImageChip attached={attached} onRemove={onRemove} onPreview={onPreview} />
+    : <DocumentChip attached={attached} onRemove={onRemove} onPreview={onPreview} />;
 }
 
 // ─── Chat error banner ─────────────────────────────────────────────────────
 
 interface ChatErrorInfo {
-  type: "rate_limit" | "api_error" | "network";
+  type: "rate_limit" | "limit_exceeded" | "api_error" | "network";
   message: string;
   retryAfter?: number;
 }
@@ -161,6 +169,8 @@ function ChatErrorBanner({ error, onDismiss, onRetry }: { error: ChatErrorInfo; 
   }, [secondsLeft]);
 
   const isRateLimit = error.type === "rate_limit";
+  const isLimitExceeded = error.type === "limit_exceeded";
+  const isAmber = isRateLimit || isLimitExceeded;
 
   function formatSeconds(s: number): string {
     if (s <= 0) return "0s";
@@ -172,6 +182,8 @@ function ChatErrorBanner({ error, onDismiss, onRetry }: { error: ChatErrorInfo; 
   // Derive a user-friendly short message
   const friendlyTitle = isRateLimit
     ? "Rate limit reached"
+    : isLimitExceeded
+    ? "Spending limit reached"
     : error.type === "network"
     ? "Connection error"
     : "Request failed";
@@ -182,13 +194,13 @@ function ChatErrorBanner({ error, onDismiss, onRetry }: { error: ChatErrorInfo; 
     ? error.message.slice(0, 157) + "…"
     : error.message;
 
-  const canRetry = !isRateLimit || (secondsLeft !== null && secondsLeft <= 0);
+  const canRetry = !isAmber || (secondsLeft !== null && secondsLeft <= 0 && !isLimitExceeded);
 
   return (
     <div
       className={cn(
         "flex items-start gap-3 rounded-2xl border px-4 py-3.5 shadow-md",
-        isRateLimit
+        isAmber
           ? "bg-amber-50 border-amber-200"
           : error.type === "network"
           ? "bg-slate-50 border-slate-200"
@@ -199,10 +211,10 @@ function ChatErrorBanner({ error, onDismiss, onRetry }: { error: ChatErrorInfo; 
       <div
         className={cn(
           "mt-0.5 shrink-0 h-8 w-8 rounded-xl flex items-center justify-center",
-          isRateLimit ? "bg-amber-100" : error.type === "network" ? "bg-slate-100" : "bg-red-100"
+          isAmber ? "bg-amber-100" : error.type === "network" ? "bg-slate-100" : "bg-red-100"
         )}
       >
-        {isRateLimit ? (
+        {isAmber ? (
           <Clock className="h-4 w-4 text-amber-600" />
         ) : error.type === "network" ? (
           <Wifi className="h-4 w-4 text-slate-500" />
@@ -214,12 +226,12 @@ function ChatErrorBanner({ error, onDismiss, onRetry }: { error: ChatErrorInfo; 
       {/* Content */}
       <div className="flex-1 min-w-0">
         <p className={cn("text-sm font-semibold leading-snug",
-          isRateLimit ? "text-amber-800" : error.type === "network" ? "text-slate-700" : "text-red-700"
+          isAmber ? "text-amber-800" : error.type === "network" ? "text-slate-700" : "text-red-700"
         )}>
           {friendlyTitle}
         </p>
         <p className={cn("text-xs mt-0.5 leading-relaxed",
-          isRateLimit ? "text-amber-700" : error.type === "network" ? "text-slate-500" : "text-red-500"
+          isAmber ? "text-amber-700" : error.type === "network" ? "text-slate-500" : "text-red-500"
         )}>
           {friendlyBody}
         </p>
@@ -238,7 +250,7 @@ function ChatErrorBanner({ error, onDismiss, onRetry }: { error: ChatErrorInfo; 
               onClick={onRetry}
               className={cn(
                 "inline-flex items-center gap-1.5 text-[11px] font-semibold px-2.5 py-1 rounded-full border transition-colors",
-                isRateLimit
+                isAmber
                   ? "bg-amber-600 text-white border-amber-600 hover:bg-amber-700"
                   : error.type === "network"
                   ? "bg-slate-700 text-white border-slate-700 hover:bg-slate-800"
@@ -258,7 +270,7 @@ function ChatErrorBanner({ error, onDismiss, onRetry }: { error: ChatErrorInfo; 
         onClick={onDismiss}
         className={cn(
           "shrink-0 h-6 w-6 rounded-lg flex items-center justify-center transition-colors",
-          isRateLimit
+          isAmber
             ? "text-amber-400 hover:text-amber-600 hover:bg-amber-100"
             : error.type === "network"
             ? "text-slate-400 hover:text-slate-600 hover:bg-slate-100"
@@ -290,7 +302,33 @@ export default function ChatWindow({
   const [attachedFiles, setAttachedFiles] = useState<AttachedFile[]>([]);
   const [fileWarning, setFileWarning] = useState<string | null>(null);
   const [isDragging, setIsDragging] = useState(false);
-  const [chatError, setChatError] = useState<{ type: "rate_limit" | "api_error" | "network"; message: string; retryAfter?: number } | null>(null);
+  const [chatError, setChatError] = useState<{ type: "rate_limit" | "limit_exceeded" | "api_error" | "network"; message: string; retryAfter?: number } | null>(null);
+  const [previewFile, setPreviewFile] = useState<PreviewFile | null>(null);
+  const [gmailConnected, setGmailConnected] = useState(false);
+  const [mcpConnected, setMcpConnected] = useState(false);
+
+  function handlePreviewAttached(af: AttachedFile) {
+    if (af.previewUrl) {
+      // Image — already have an object URL
+      setPreviewFile({ filename: af.file.name, mediaType: af.file.type, url: af.previewUrl });
+    } else if (isPdfFile(af.file)) {
+      const reader = new FileReader();
+      reader.onload = () => setPreviewFile({ filename: af.file.name, mediaType: "application/pdf", url: reader.result as string });
+      reader.readAsDataURL(af.file);
+    } else if (isServerParsedFile(af.file)) {
+      const form = new FormData();
+      form.append("file", af.file);
+      fetch("/api/parse-file", { method: "POST", body: form })
+        .then((r) => r.json())
+        .then((data) => setPreviewFile({ filename: af.file.name, mediaType: "text/plain", text: data.text ?? "Could not extract text." }))
+        .catch(() => setPreviewFile({ filename: af.file.name, mediaType: "text/plain", text: "Failed to parse file." }));
+    } else {
+      // text / csv / md
+      const reader = new FileReader();
+      reader.onload = () => setPreviewFile({ filename: af.file.name, mediaType: af.file.type, text: reader.result as string });
+      reader.readAsText(af.file);
+    }
+  }
 
   // Pick up prompt pre-filled from sidebar capability panel
   useEffect(() => {
@@ -316,6 +354,8 @@ export default function ChatWindow({
         if (dbActive) setActiveToneId(dbActive._id);
       })
       .catch(() => {});
+    fetch("/api/gmail/status").then((r) => r.json()).then((d) => setGmailConnected(!!d.connected)).catch(() => {});
+    fetch("/api/mcp/status").then((r) => r.json()).then((d) => setMcpConnected(!!d.connected)).catch(() => {});
   }, []);
 
   const modeRef = useRef<ChatMode>(null);
@@ -369,6 +409,17 @@ export default function ChatWindow({
     if (!chatErrorRaw) { setChatError(null); return; }
     try {
       const parsed = JSON.parse(chatErrorRaw.message);
+      if (parsed?.error === "limit_exceeded") {
+        const resetAt = parsed.resetAt ? new Date(parsed.resetAt) : null;
+        const resetStr = resetAt
+          ? resetAt.toLocaleDateString("en-US", { month: "short", day: "numeric" })
+          : "never";
+        setChatError({
+          type: "limit_exceeded",
+          message: `Spending limit of $${(parsed.limitUsd as number).toFixed(2)} reached for this ${parsed.period} period. Resets ${resetStr}.`,
+        });
+        return;
+      }
       if (parsed?.error) {
         setChatError({ type: parsed.error, message: parsed.message, retryAfter: parsed.retryAfter });
         return;
@@ -578,6 +629,43 @@ export default function ChatWindow({
       <div data-tour="model-selector" className="inline-flex">
         <ModelSelector value={model} onChange={setModel} disabled={isLoading} locked={messages.length > 0} />
       </div>
+
+      {/* Connection pills */}
+      {(gmailConnected || mcpConnected) && (
+        <div className="flex items-center gap-1.5">
+          {gmailConnected && (
+            <a
+              href="/settings?section=integrations"
+              title="Gmail connected"
+              className="flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium bg-red-50 text-red-600 border border-red-100 hover:bg-red-100 transition-colors"
+            >
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shrink-0" />
+              <svg viewBox="52 42 88 66" className="w-3 h-3 shrink-0" xmlns="http://www.w3.org/2000/svg">
+                <path fill="#4285f4" d="M58 108h14V74L52 59v43c0 3.32 2.69 6 6 6"/>
+                <path fill="#34a853" d="M120 108h14c3.32 0 6-2.69 6-6V59l-20 15"/>
+                <path fill="#fbbc04" d="M120 48v26l20-15v-8c0-7.42-8.47-11.65-14.4-7.2"/>
+                <path fill="#ea4335" d="M72 74V48l24 18 24-18v26L96 92"/>
+                <path fill="#c5221f" d="M52 51v8l20 15V48l-5.6-4.2C60.47 39.35 52 43.58 52 51"/>
+              </svg>
+              Gmail
+            </a>
+          )}
+          {mcpConnected && (
+            <a
+              href="/settings?section=integrations"
+              title="Internal tools connected"
+              className="flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium bg-blue-50 text-blue-600 border border-blue-100 hover:bg-blue-100 transition-colors"
+            >
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shrink-0" />
+              <svg viewBox="0 0 24 24" className="w-3 h-3 shrink-0" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"/>
+              </svg>
+              Tools
+            </a>
+          )}
+        </div>
+      )}
+
       {(costUsd > 0 || isLoading) && messages.length > 0 && (
         <div className="flex items-center gap-1 text-xs text-slate-400">
           <DollarSign className="w-3 h-3" />
@@ -657,7 +745,7 @@ export default function ChatWindow({
           <div className="px-3 pt-3 pb-0">
             <div className="flex gap-2 overflow-x-auto pb-2 scrollbar-none">
               {attachedFiles.map((af, i) => (
-                <FileChip key={i} attached={af} onRemove={() => handleRemoveFile(i)} />
+                <FileChip key={i} attached={af} onRemove={() => handleRemoveFile(i)} onPreview={() => handlePreviewAttached(af)} />
               ))}
             </div>
             <div className="border-t border-slate-100 mx-1" />
@@ -747,7 +835,7 @@ export default function ChatWindow({
 
           {/* Suggestion chips */}
           <div data-tour="suggestion-chips" className="flex flex-wrap justify-center gap-2 mb-6">
-            {CAPABILITIES.flatMap((cap) => cap.prompts.slice(0, 1)).map((prompt) => (
+            {CAPABILITIES.flatMap((cap) => cap.examples.slice(0, 1)).map((prompt) => (
               <button
                 key={prompt}
                 onClick={() => handlePromptSelect(prompt)}
@@ -771,7 +859,7 @@ export default function ChatWindow({
       <div className="flex-1 overflow-y-auto">
         <div className="max-w-3xl mx-auto px-4 py-6 space-y-5">
           {messages.map((m) => (
-            <MessageBubble key={m.id} message={m} signatureHtml={signatureHtml} />
+            <MessageBubble key={m.id} message={m} signatureHtml={signatureHtml} onFilePreview={setPreviewFile} />
           ))}
           {isLoading && (
             <ToolCallIndicator
@@ -801,13 +889,19 @@ export default function ChatWindow({
 
   return (
     <div
-      className="relative flex flex-col h-full bg-gray-100"
+      className="relative flex h-full bg-gray-100"
       onDragEnter={handleDragEnter}
       onDragLeave={handleDragLeave}
       onDragOver={handleDragOver}
       onDrop={handleDrop}
     >
-      {pageContent}
+      <div className="flex-1 flex flex-col min-w-0">
+        {pageContent}
+      </div>
+
+      {previewFile && (
+        <FilePreviewPanel file={previewFile} onClose={() => setPreviewFile(null)} />
+      )}
 
       {/* Full-page drag overlay */}
       {isDragging && (

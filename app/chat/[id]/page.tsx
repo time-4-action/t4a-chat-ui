@@ -43,14 +43,13 @@ export default async function ConversationPage({
   const initialMessages: UIMessage[] = conv.messages.map((m: any) => ({
     id: m._id.toString(),
     role: m.role as "user" | "assistant",
-    content: m.content,
-    parts: [
-      // File parts first (images with data URL, docs with metadata only)
+    // Use stored parts (full tool results) when available; fall back to text-only for old messages
+    parts: m.parts ?? [
       ...(m.files ?? []).map((f: any) => ({
         type: "file" as const,
         mediaType: f.mediaType,
         filename: f.filename,
-        url: f.url, // empty string for non-images — MessageBubble handles that
+        url: f.url,
       })),
       { type: "text" as const, text: m.content },
     ],
