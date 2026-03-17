@@ -86,8 +86,15 @@ function extractAttachments(payload: any): Array<{ filename: string; mimeType: s
   return attachments;
 }
 
-export function buildGmailTools(accessToken: string) {
+export interface GmailUserPrefs {
+  senderName?: string;     // e.g. "John Smith"
+  senderEmail?: string;    // e.g. "john@company.com"
+  signatureHtml?: string;  // raw HTML from profile editor
+}
+
+export function buildGmailTools(accessToken: string, userPrefs: GmailUserPrefs = {}) {
   const gmail = getGmail(accessToken);
+  const signaturePlain = userPrefs.signatureHtml ? htmlToText(userPrefs.signatureHtml) : "";
 
   return {
     gmail_search_messages: tool({
@@ -133,7 +140,7 @@ export function buildGmailTools(accessToken: string) {
     }),
 
     gmail_read_message: tool({
-      description: "Read the full content of a single Gmail message by its ID.",
+      description: "Read the full content of a single Gmail message by its ID. Attachments are automatically resolved — each attachment in the result already includes a downloadUrl ready for display. Do NOT call gmail_download_attachment separately; just present the attachments from this result directly.",
       inputSchema: jsonSchema<{ messageId: string }>({
         type: "object",
         properties: {
@@ -149,7 +156,17 @@ export function buildGmailTools(accessToken: string) {
         });
         const h = msg.data.payload?.headers ?? [];
         const { text: bodyText, isHtml } = extractBody(msg.data.payload);
-        const attachments = extractAttachments(msg.data.payload);
+        const rawAttachments = extractAttachments(msg.data.payload);
+        const plainBody = isHtml ? htmlToText(bodyText) : bodyText;
+        const attachments = rawAttachments.map((a) => {
+          const params = new URLSearchParams({
+            messageId: msg.data.id!,
+            attachmentId: a.attachmentId,
+            filename: a.filename,
+            mimeType: a.mimeType,
+          });
+          return { ...a, downloadUrl: `/api/gmail/attachment?${params.toString()}` };
+        });
         return {
           id: msg.data.id,
           threadId: msg.data.threadId,
@@ -158,8 +175,7 @@ export function buildGmailTools(accessToken: string) {
           to: headerValue(h, "To"),
           date: headerValue(h, "Date"),
           snippet: msg.data.snippet ?? "",
-          body: bodyText.slice(0, 30000),
-          isHtml,
+          body: plainBody.slice(0, 30000),
           labels: msg.data.labelIds ?? [],
           attachments,
         };
@@ -227,13 +243,24 @@ export function buildGmailTools(accessToken: string) {
         required: ["to", "subject", "body"],
       }),
       execute: async ({ to, subject, body, cc }: { to: string; subject: string; body: string; cc?: string }) => {
+        const fromHeader = userPrefs.senderName && userPrefs.senderEmail
+          ? `From: ${userPrefs.senderName} <${userPrefs.senderEmail}>`
+          : userPrefs.senderEmail
+          ? `From: ${userPrefs.senderEmail}`
+          : null;
+
+        const fullBody = signaturePlain
+          ? `${body}\n\n--\n${signaturePlain}`
+          : body;
+
         const lines = [
+          fromHeader,
           `To: ${to}`,
           cc ? `Cc: ${cc}` : null,
           `Subject: ${subject}`,
           "Content-Type: text/plain; charset=utf-8",
           "",
-          body,
+          fullBody,
         ].filter(Boolean);
 
         const raw = Buffer.from(lines.join("\r\n"))
@@ -271,7 +298,7 @@ export function buildGmailTools(accessToken: string) {
     }),
 
     gmail_download_attachment: tool({
-      description: "Prepare an email attachment for display/download in the chat. Returns a downloadUrl that the chat UI will render as an image preview or download button. Use the attachment metadata returned by gmail_read_message to get the required IDs, filename, and mimeType.",
+      description: "Prepare an email attachment for display/download in the chat. NOTE: gmail_read_message already includes downloadUrl on each attachment automatically — only call this tool if you have an attachmentId but no downloadUrl (e.g. from an older search result).",
       inputSchema: jsonSchema<{ messageId: string; attachmentId: string; filename: string; mimeType: string; size: number }>({
         type: "object",
         properties: {

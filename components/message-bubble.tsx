@@ -7,12 +7,6 @@ import { githubGist } from "react-syntax-highlighter/dist/esm/styles/hljs";
 import remarkGfm from "remark-gfm";
 import EmailCard, { parseEmailFromText } from "./email-card";
 import type { PreviewFile } from "./file-preview-panel";
-import GmailEmailCard, {
-  type ProcessedGmailEmail,
-  type GmailReadMessageResult,
-  type GmailReadThreadResult,
-  type GmailDownloadResult,
-} from "./gmail-email-card";
 
 // hljs languages supported by react-syntax-highlighter
 const HLJS_LANGUAGES = new Set([
@@ -234,74 +228,89 @@ function GmailAttachment({
   const isImage = attachment.mimeType.startsWith("image/");
   const isPdf = attachment.mimeType === "application/pdf" || attachment.filename.endsWith(".pdf");
   const canPreview = isImage || isPdf;
-  const shortName = attachment.filename.length > 28
-    ? attachment.filename.slice(0, 25) + "…"
+  const ext = attachment.filename.split(".").pop()?.toUpperCase() ?? "FILE";
+  const shortName = attachment.filename.length > 20
+    ? attachment.filename.slice(0, 17) + "…"
     : attachment.filename;
 
-  const ext = attachment.filename.split(".").pop()?.toUpperCase() ?? "FILE";
-
-  // Shared chip content
   const chipContent = (
     <>
-      <div className="h-9 w-9 rounded-lg bg-blue-100 flex items-center justify-center shrink-0">
-        <span className="text-[10px] font-bold text-blue-700">{ext.slice(0, 4)}</span>
+      <div className="h-7 w-7 rounded-md bg-blue-100 flex items-center justify-center shrink-0">
+        <span className="text-[8px] font-bold text-blue-700">{ext.slice(0, 4)}</span>
       </div>
       <div className="flex-1 min-w-0">
-        <p className="text-xs font-semibold text-slate-800 truncate leading-snug">{shortName}</p>
-        <p className="text-[10px] text-slate-400 mt-0.5">
-          {formatAttachmentSize(attachment.size)} · {canPreview ? "Click to preview" : "Click to download"}
-        </p>
+        <p className="text-[11px] font-medium text-slate-800 truncate leading-tight">{shortName}</p>
+        <p className="text-[10px] text-slate-400">{formatAttachmentSize(attachment.size)}</p>
       </div>
-      <Download className="h-3.5 w-3.5 text-slate-400 group-hover:text-blue-600 transition-colors shrink-0" />
+      <Download className="h-3 w-3 text-slate-300 group-hover:text-blue-500 transition-colors shrink-0" />
     </>
   );
 
-  const chipClass = "inline-flex items-center gap-2.5 my-2 bg-slate-50 border border-slate-200 rounded-xl px-3 py-2.5 hover:bg-slate-100 transition-colors group max-w-xs text-left";
+  const chipClass = "inline-flex items-center gap-1.5 bg-white border border-slate-200 rounded-lg px-2 py-1.5 hover:bg-slate-50 hover:border-slate-300 transition-colors group w-40 text-left";
 
-  if (isImage) {
-    return (
-      <div className="my-2 max-w-sm">
-        <button
-          type="button"
-          onClick={() => canPreview && onFilePreview
-            ? onFilePreview({ filename: attachment.filename, mediaType: attachment.mimeType, url: attachment.downloadUrl })
-            : undefined}
-          className="focus:outline-none block"
-        >
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img
-            src={attachment.downloadUrl}
-            alt={attachment.filename}
-            className="rounded-xl border border-slate-200 shadow-sm max-h-72 object-contain hover:opacity-90 transition-opacity cursor-zoom-in"
-          />
-        </button>
-        <p className="text-[11px] text-slate-400 mt-1 pl-0.5">{attachment.filename} · {formatAttachmentSize(attachment.size)}</p>
-      </div>
-    );
-  }
-
-  // Previewable (PDF): intercept click to open panel
   if (canPreview && onFilePreview) {
     return (
-      <button
-        type="button"
-        onClick={() => onFilePreview({ filename: attachment.filename, mediaType: attachment.mimeType, url: attachment.downloadUrl })}
-        className={chipClass}
-      >
+      <button type="button" onClick={() => onFilePreview({ filename: attachment.filename, mediaType: attachment.mimeType, url: attachment.downloadUrl })} className={chipClass}>
         {chipContent}
       </button>
     );
   }
 
-  // Non-previewable (STL, DOCX, ZIP, etc.): plain anchor → browser downloads it
   return (
-    <a
-      href={attachment.downloadUrl}
-      download={attachment.filename}
-      className={chipClass}
-    >
+    <a href={attachment.downloadUrl} download={attachment.filename} className={chipClass}>
       {chipContent}
     </a>
+  );
+}
+
+function GmailAttachmentGroup({
+  attachments,
+  onFilePreview,
+}: {
+  attachments: GmailAttachmentResult[];
+  onFilePreview?: (file: PreviewFile) => void;
+}) {
+  const [open, setOpen] = useState(attachments.length <= 2);
+
+  // Single image — show inline preview
+  if (attachments.length === 1 && attachments[0].mimeType.startsWith("image/")) {
+    const att = attachments[0];
+    return (
+      <div className="mb-2 max-w-sm">
+        <button
+          type="button"
+          onClick={() => onFilePreview?.({ filename: att.filename, mediaType: att.mimeType, url: att.downloadUrl })}
+          className="focus:outline-none block"
+        >
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src={att.downloadUrl} alt={att.filename} className="rounded-xl border border-slate-200 shadow-sm max-h-72 object-contain hover:opacity-90 transition-opacity cursor-zoom-in" />
+        </button>
+        <p className="text-[11px] text-slate-400 mt-1 pl-0.5">{att.filename} · {formatAttachmentSize(att.size)}</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="mb-2 rounded-xl border border-slate-200 bg-slate-50 overflow-hidden">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        className="w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-slate-100 transition-colors"
+      >
+        <Download className="h-3.5 w-3.5 text-slate-400 shrink-0" />
+        <span className="text-xs font-medium text-slate-600 flex-1">
+          {attachments.length} attachment{attachments.length !== 1 ? "s" : ""}
+        </span>
+        <span className="text-[10px] text-slate-400">{open ? "▲" : "▼"}</span>
+      </button>
+      {open && (
+        <div className="px-2 pb-2 flex flex-wrap gap-1.5">
+          {attachments.map((att, i) => (
+            <GmailAttachment key={i} attachment={att} onFilePreview={onFilePreview} />
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -345,18 +354,20 @@ function parseFileBlocks(text: string): { cleanText: string; blocks: FileBlock[]
 function extractGmailAttachments(message: UIMessage): GmailAttachmentResult[] {
   if (message.role !== "assistant") return [];
 
-  // Dump ALL parts unconditionally so we can see the real SDK structure
-  if (process.env.NODE_ENV === "development") {
-    console.log("[gmail-debug] assistant msg parts:", JSON.stringify(message.parts, null, 2));
-  }
-
   const results: GmailAttachmentResult[] = [];
 
   for (const p of message.parts as any[]) {
     const toolName = getToolName(p);
-    if (toolName !== "gmail_download_attachment") continue;
     const result = getToolResult(p);
-    if (result?.downloadUrl && result?.filename) {
+    if (!result || !toolName) continue;
+
+    if (toolName === "gmail_read_message" && Array.isArray(result.attachments)) {
+      for (const a of result.attachments) {
+        if (a?.downloadUrl && a?.filename) {
+          results.push(a as GmailAttachmentResult);
+        }
+      }
+    } else if (toolName === "gmail_download_attachment" && result?.downloadUrl && result?.filename) {
       results.push(result as GmailAttachmentResult);
     }
   }
@@ -389,79 +400,6 @@ function getToolName(p: any): string | undefined {
   return p.toolName ?? p.toolInvocation?.toolName;
 }
 
-function extractGmailEmails(message: UIMessage): ProcessedGmailEmail[] {
-  if (message.role !== "assistant") return [];
-
-  const readMessages: GmailReadMessageResult[] = [];
-  const readThreads: GmailReadThreadResult[] = [];
-  const downloads: GmailDownloadResult[] = [];
-  let searchResults: any[] = [];
-
-  for (const p of message.parts as any[]) {
-    const toolName = getToolName(p);
-    const result = getToolResult(p);
-    if (!result || !toolName) continue;
-
-    if (process.env.NODE_ENV === "development") {
-      console.log(`[gmail-extract] tool="${toolName}" result keys:`, Object.keys(result));
-    }
-
-    if (toolName === "gmail_read_message" && (result.from || result.body || result.subject)) {
-      // Relax: don't require both id AND subject — either field is enough
-      readMessages.push({
-        id:          result.id ?? "",
-        threadId:    result.threadId ?? "",
-        subject:     result.subject ?? "(no subject)",
-        from:        result.from ?? "",
-        to:          result.to ?? "",
-        date:        result.date ?? "",
-        body:        result.body ?? result.snippet ?? "",
-        isHtml:      result.isHtml ?? false,
-        snippet:     result.snippet,
-        labels:      result.labels,
-        attachments: result.attachments,
-      });
-    } else if (toolName === "gmail_read_thread" && result.threadId) {
-      readThreads.push(result as GmailReadThreadResult);
-    } else if (toolName === "gmail_download_attachment" && result.downloadUrl) {
-      downloads.push(result as GmailDownloadResult);
-    } else if (toolName === "gmail_search_messages" && Array.isArray(result.results)) {
-      searchResults = result.results;
-    }
-  }
-
-  // Prefer full read_message results
-  if (readMessages.length > 0) {
-    return readMessages.map((msg) => {
-      const resolvedAttachments = (msg.attachments ?? [])
-        .map((a) => downloads.find((d) => d.filename === a.filename))
-        .filter(Boolean) as GmailDownloadResult[];
-      const thread = readThreads.find((t) => t.threadId === msg.threadId);
-      return { message: msg, resolvedAttachments, thread };
-    });
-  }
-
-  // Fallback: promote search result snippets to cards when AI skipped read_message
-  if (searchResults.length > 0) {
-    return searchResults.slice(0, 5).map((sr: any) => ({
-      message: {
-        id:          sr.id ?? "",
-        threadId:    sr.threadId ?? "",
-        subject:     sr.subject ?? "(no subject)",
-        from:        sr.from ?? "",
-        to:          "",
-        date:        sr.date ?? "",
-        body:        sr.snippet ?? "",
-        labels:      [],
-        attachments: [],
-      } as GmailReadMessageResult,
-      resolvedAttachments: [],
-      thread: undefined,
-    }));
-  }
-
-  return [];
-}
 
 export default function MessageBubble({
   message,
@@ -649,19 +587,7 @@ export default function MessageBubble({
     );
   }
 
-  // Prefer the rich email card view when gmail_read_message was called
-  const gmailEmails = extractGmailEmails(message);
-  if (gmailEmails.length > 0) {
-    return (
-      <div className="w-full space-y-3">
-        {gmailEmails.map((email, i) => (
-          <GmailEmailCard key={i} email={email} onFilePreview={onFilePreview} />
-        ))}
-      </div>
-    );
-  }
-
-  // Fallback: old attachment-only chips (gmail_download_attachment without read_message)
+  // Attachment chips for gmail_download_attachment results
   const gmailAttachments = extractGmailAttachments(message);
 
   return (
@@ -676,11 +602,7 @@ export default function MessageBubble({
       {/* Bubble */}
       <div className="max-w-[85%] sm:max-w-[78%] rounded-2xl rounded-tl-sm px-4 py-3 text-sm leading-relaxed bg-white shadow-sm border border-slate-200 text-slate-800">
         {gmailAttachments.length > 0 && (
-          <div className="flex flex-col gap-1 mb-2">
-            {gmailAttachments.map((att, i) => (
-              <GmailAttachment key={i} attachment={att} onFilePreview={onFilePreview} />
-            ))}
-          </div>
+          <GmailAttachmentGroup attachments={gmailAttachments} onFilePreview={onFilePreview} />
         )}
         <ReactMarkdown
           remarkPlugins={[remarkGfm]}

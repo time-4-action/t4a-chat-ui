@@ -477,33 +477,46 @@ export async function POST(req: NextRequest) {
   }
 
   // Gmail tools — injected directly when the user has Gmail connected
-  let gmailMcpClient: { close: () => Promise<void> } | null = null; // kept for close() calls below (no-op now)
   let gmailEnabled = false;
+  let gmailSenderIdentity = "";
   try {
     const gmailAccessToken = await getGmailAccessToken(session.user.sub);
     if (gmailAccessToken) {
-      const gmailTools = buildGmailTools(gmailAccessToken);
+      const gmailPrefs = {
+        senderName: userPrefs?.personalInfo?.name || undefined,
+        senderEmail: undefined as string | undefined, // resolved below via get_profile if needed
+        signatureHtml: userPrefs?.communicationStyle?.signatureStyle || undefined,
+      };
+      const gmailTools = buildGmailTools(gmailAccessToken, gmailPrefs);
       mcpTools = { ...mcpTools, ...gmailTools };
       gmailEnabled = true;
+
+      if (gmailPrefs.senderName) {
+        gmailSenderIdentity = `\nYour sender identity: **${gmailPrefs.senderName}**${userPrefs?.personalInfo?.jobTitle ? `, ${userPrefs.personalInfo.jobTitle}` : ""}${userPrefs?.personalInfo?.company ? ` at ${userPrefs.personalInfo.company}` : ""}.`;
+      }
     }
   } catch (err) {
     console.warn("[chat] Gmail tools unavailable:", (err as Error).message);
   }
 
+  const signatureNote = userPrefs?.communicationStyle?.signatureStyle
+    ? "\nThe user's email signature is automatically appended to every draft — do NOT write a closing, sign-off, or signature in the email body. End the body after the last content paragraph."
+    : "";
+
   const gmailPromptSection = gmailEnabled
     ? `\n\n## Gmail
 
-You have access to the user's Gmail via: gmail_search_messages, gmail_read_message, gmail_read_thread, gmail_list_labels, gmail_create_draft, gmail_get_profile, gmail_download_attachment.
+You have access to the user's Gmail via: gmail_search_messages, gmail_read_message, gmail_read_thread, gmail_list_labels, gmail_create_draft, gmail_get_profile.
 Always use these tools when the user asks about email, inbox, messages, or wants to draft/send.
 Never say you lack email access.
+${gmailSenderIdentity}${signatureNote}
 
 ### MANDATORY workflow — you MUST follow this exact sequence for every email query:
 
 **Step 1 — Search:** Call gmail_search_messages to find relevant message IDs.
 **Step 2 — Read (REQUIRED, NO EXCEPTIONS):** For EVERY message from step 1, call gmail_read_message immediately. You MUST call this tool — never skip it, never summarize from search metadata alone, never answer before calling gmail_read_message. The search result has NO body content.
-**Step 3 — Thread:** Call gmail_read_thread using the threadId from gmail_read_message.
-**Step 4 — Attachments:** If gmail_read_message lists any attachments, call gmail_download_attachment for each one in parallel.
-**Step 5 — Respond:** Only after completing all tool calls above, write your final response.
+**Step 3 — Thread (optional):** Call gmail_read_thread if the user asks about the full conversation.
+**Step 4 — Respond:** Only after completing all tool calls above, write your final response. Attachments from gmail_read_message are already resolved — present them directly without calling any download tool.
 
 CRITICAL: Never respond with email content without first calling gmail_read_message. The search tool returns NO body/content. If you skip gmail_read_message you are fabricating content.`
     : "";
@@ -520,7 +533,6 @@ CRITICAL: Never respond with email content without first calling gmail_read_mess
       onFinish: async ({ text, totalUsage, steps }) => {
         console.log("[chat] totalUsage:", JSON.stringify(totalUsage));
         await mcpClient?.close();
-        await gmailMcpClient?.close();
 
         // Memory update — only when there's actual text exchange
         if (text && lastUserText) {
@@ -607,7 +619,6 @@ CRITICAL: Never respond with email content without first calling gmail_read_mess
     return result.toUIMessageStreamResponse();
   } catch (err: any) {
     await mcpClient?.close();
-    await gmailMcpClient?.close();
 
     const lastErr = err?.lastError ?? err;
     const statusCode: number = lastErr?.statusCode ?? 500;
