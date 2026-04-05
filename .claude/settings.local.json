@@ -15,7 +15,8 @@
       "mcp__ide__getDiagnostics",
       "Bash(node -e \":*)",
       "WebFetch(domain:commons.wikimedia.org)",
-      "Bash(cd:*)"
+      "Bash(cd:*)",
+      "Bash(find /c/Users/grega/Documents/Priv/Grega/Development/ai-agent-ui -maxdepth 3 \\\\\\(-name service-worker* -o -name sw.js -o -name *service* \\\\\\) -type f)"
     ]
   }
 }

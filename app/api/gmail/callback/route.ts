@@ -91,5 +91,6 @@ export async function GET(req: NextRequest) {
     { upsert: true }
   );
 
-  return NextResponse.redirect(new URL("/settings?gmailConnected=true", req.url));
+  const base = process.env.AUTH0_BASE_URL ?? req.nextUrl.origin;
+  return NextResponse.redirect(new URL("/settings?gmailConnected=true", base));
 }

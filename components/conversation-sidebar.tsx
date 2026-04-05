@@ -232,7 +232,7 @@ export default function ConversationSidebar({ open, onToggle, mobileClose }: Pro
                           >
                             {c.title}
                           </Link>
-                          <div className="opacity-0 group-hover:opacity-100 flex items-center gap-0.5 shrink-0 transition-opacity">
+                          <div className="flex items-center gap-0.5 shrink-0 transition-opacity lg:opacity-0 lg:group-hover:opacity-100">
                             <button
                               onClick={(e) => startRename(c, e)}
                               className="p-1.5 rounded-md hover:bg-slate-200 text-slate-400 hover:text-slate-600 transition-colors"
@@ -259,10 +259,14 @@ export default function ConversationSidebar({ open, onToggle, mobileClose }: Pro
         ))}
       </div>
 
-      {/* Feedback modal */}
+      {/* Feedback modal — centered on desktop, bottom sheet on mobile */}
       {showFeedback && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm" onClick={() => setShowFeedback(false)}>
-          <div className="bg-white rounded-2xl shadow-xl p-6 mx-4 max-w-sm w-full" onClick={(e) => e.stopPropagation()}>
+        <div className="fixed inset-0 z-50 flex bg-black/40 backdrop-blur-sm items-end lg:items-center justify-center" onClick={() => setShowFeedback(false)}>
+          <div className="bg-white lg:rounded-2xl rounded-t-2xl shadow-xl p-6 w-full max-w-sm lg:mx-4 animate-slide-up lg:[animation:none]" onClick={(e) => e.stopPropagation()}>
+            {/* Drag handle (mobile only) */}
+            <div className="lg:hidden flex justify-center mb-4">
+              <div className="w-10 h-1 bg-slate-200 rounded-full" />
+            </div>
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-base font-semibold text-slate-800">Request Improvement</h3>
               <button onClick={() => setShowFeedback(false)} className="p-1 rounded-lg hover:bg-slate-100 text-slate-400 hover:text-slate-600 transition-colors">

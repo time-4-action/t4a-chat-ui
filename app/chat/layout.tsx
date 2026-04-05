@@ -1,15 +1,30 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useRef, useCallback } from "react";
 import { Menu } from "lucide-react";
 import { cn } from "@/lib/utils";
 import ConversationSidebar from "@/components/conversation-sidebar";
 import { TourProvider } from "@/lib/tour-context";
 import GuidedTour from "@/components/guided-tour";
+import NetworkStatus from "@/components/network-status";
+import InstallPrompt from "@/components/install-prompt";
 
 export default function ChatLayout({ children }: { children: React.ReactNode }) {
   const [open, setOpen] = useState(true);
   const [mobileOpen, setMobileOpen] = useState(false);
+  const touchStartX = useRef<number | null>(null);
+
+  const handleTouchStart = useCallback((e: React.TouchEvent) => {
+    touchStartX.current = e.touches[0].clientX;
+  }, []);
+
+  const handleTouchEnd = useCallback((e: React.TouchEvent) => {
+    if (touchStartX.current === null) return;
+    const delta = e.changedTouches[0].clientX - touchStartX.current;
+    touchStartX.current = null;
+    if (delta > 50) setMobileOpen(true);
+    else if (delta < -50) setMobileOpen(false);
+  }, []);
 
   return (
     <TourProvider>
@@ -44,7 +59,14 @@ export default function ChatLayout({ children }: { children: React.ReactNode }) 
       </aside>
 
       {/* Main */}
-      <main className="flex-1 flex flex-col overflow-hidden min-w-0">
+      <main
+        className="flex-1 flex flex-col overflow-hidden min-w-0"
+        style={{ touchAction: "pan-y" }}
+        onTouchStart={handleTouchStart}
+        onTouchEnd={handleTouchEnd}
+      >
+        <NetworkStatus />
+        <InstallPrompt />
         {/* Mobile top bar */}
         <div className="lg:hidden flex items-center h-14 px-4 border-b border-slate-200 bg-white shrink-0 gap-3">
           <button

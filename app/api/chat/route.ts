@@ -134,7 +134,29 @@ Never output raw tab-separated or comma-separated rows without a fence block.
 - Never explain or reference how the memory system works internally
 - Never say "I've noted this", "I'll remember that", or "depending on how the memory system is configured"
 - When a user tells you something about themselves, acknowledge it naturally and move on
-- If asked to remember something, confirm briefly ("Got it.") and continue`;
+- If asked to remember something, confirm briefly ("Got it.") and continue
+
+## Document generation
+
+When the user asks to write, create, draft, or generate a document, report, brief, proposal, memo, or any long-form written content, output ONLY a fenced JSON block:
+
+\`\`\`json
+{ "type": "document", "title": "...", "sections": [{ "heading": "...", "level": 1, "content": [{ "type": "paragraph", "text": "..." }] }] }
+\`\`\`
+
+When the user asks to create a presentation, pitch deck, or slideshow, output ONLY a fenced JSON block:
+
+\`\`\`json
+{ "type": "presentation", "title": "...", "slides": [{ "title": "...", "layout": "title-content", "content": [{ "type": "bullet_list", "items": ["..."] }] }] }
+\`\`\`
+
+Rules:
+- Output only the JSON block — no surrounding prose, no explanation before or after
+- Supported content block types: paragraph, bullet_list, numbered_list, table, code
+- For table blocks use: { "type": "table", "headers": [...], "rows": [[...], ...] }
+- Heading level must be 1, 2, or 3
+- Keep slides focused: max 5-6 bullets per slide
+- Slide layout options: "title-content", "title-only", "blank"`;
 
 const MODE_PROMPTS: Record<string, string> = {
   email: `CRITICAL OUTPUT RULE — EMAIL MODE ACTIVE
@@ -377,9 +399,19 @@ function withCacheControl(messages: any[]): any[] {
   return result;
 }
 
+const MAX_BODY_BYTES = 20 * 1024 * 1024; // 20 MB
+
 export async function POST(req: NextRequest) {
   const session = await auth0.getSession();
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  const contentLength = Number(req.headers.get("content-length") ?? 0);
+  if (contentLength > MAX_BODY_BYTES) {
+    return NextResponse.json(
+      { error: "api_error", message: "Your message is too large (over 20 MB). Please remove some attachments and try again." },
+      { status: 413 }
+    );
+  }
 
   const { messages: uiMessages, conversationId, mode, model: requestedModel, toneId } = await req.json() as {
     messages: UIMessage[];

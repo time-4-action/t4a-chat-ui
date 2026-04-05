@@ -12,7 +12,7 @@ import ChatModeSelector, { ChatMode } from "./chat-mode-selector";
 import ModelSelector from "./model-selector";
 import ToneSelector from "./tone-selector";
 import type { ToneDoc } from "./create-tone-modal";
-import { ArrowUp, DollarSign, Paperclip, Square, X, AlertCircle, Clock, Wifi, RefreshCw } from "lucide-react";
+import { ArrowUp, DollarSign, Download, Paperclip, Square, X, AlertCircle, Clock, Wifi, RefreshCw } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { DEFAULT_MODEL, ModelId, formatCost } from "@/lib/models";
 
@@ -306,6 +306,8 @@ export default function ChatWindow({
   const [previewFile, setPreviewFile] = useState<PreviewFile | null>(null);
   const [gmailConnected, setGmailConnected] = useState(false);
   const [mcpConnected, setMcpConnected] = useState(false);
+  const [exportConvMenuOpen, setExportConvMenuOpen] = useState(false);
+  const [exportingConvFormat, setExportingConvFormat] = useState<string | null>(null);
 
   function handlePreviewAttached(af: AttachedFile) {
     if (af.previewUrl) {
@@ -475,6 +477,17 @@ export default function ChatWindow({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Virtual keyboard: scroll input into view when viewport shrinks (keyboard appears)
+  useEffect(() => {
+    const vv = window.visualViewport;
+    if (!vv) return;
+    function handleResize() {
+      bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+    }
+    vv.addEventListener("resize", handleResize);
+    return () => vv.removeEventListener("resize", handleResize);
+  }, []);
+
   // ── File handling ──────────────────────────────────────────────────────
 
   function addFiles(files: File[]) {
@@ -544,6 +557,7 @@ export default function ChatWindow({
     e?.preventDefault();
     const text = input.trim();
     if ((!text && attachedFiles.length === 0) || isLoading) return;
+    navigator.vibrate?.(10);
 
     let fullText = text;
     const fileParts: FileUIPart[] = [];
@@ -624,8 +638,33 @@ export default function ChatWindow({
   const hasFiles = attachedFiles.length > 0;
   const canSend = (input.trim() || hasFiles) && !isLoading;
 
+  async function handleExportConversation(format: string) {
+    if (exportingConvFormat || conversationIdRef.current === "new") return;
+    setExportingConvFormat(format);
+    setExportConvMenuOpen(false);
+    try {
+      const res = await fetch("/api/export", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ source: "conversation", format, conversationId: conversationIdRef.current }),
+      });
+      if (!res.ok) throw new Error("Export failed");
+      const blob = await res.blob();
+      const ext = format === "markdown" ? "md" : format;
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = `conversation.${ext}`;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+    } catch (e) {
+      console.error("[export conversation]", e);
+    } finally {
+      setExportingConvFormat(null);
+    }
+  }
+
   const topBar = (
-    <div className="flex items-center justify-between px-4 py-2 border-b border-slate-200 bg-white/80 backdrop-blur-sm shrink-0">
+    <div className="hidden lg:flex items-center justify-between px-4 py-2 border-b border-slate-200 bg-white/80 backdrop-blur-sm shrink-0">
       <div data-tour="model-selector" className="inline-flex">
         <ModelSelector value={model} onChange={setModel} disabled={isLoading} locked={messages.length > 0} />
       </div>
@@ -637,7 +676,7 @@ export default function ChatWindow({
             <a
               href="/settings?section=integrations"
               title="Gmail connected"
-              className="flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium bg-red-50 text-red-600 border border-red-100 hover:bg-red-100 transition-colors"
+              className="flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium bg-blue-50 text-blue-600 border border-blue-100 hover:bg-blue-100 transition-colors"
             >
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shrink-0" />
               <svg viewBox="52 42 88 66" className="w-3 h-3 shrink-0" xmlns="http://www.w3.org/2000/svg">
@@ -666,13 +705,48 @@ export default function ChatWindow({
         </div>
       )}
 
-      {(costUsd > 0 || isLoading) && messages.length > 0 && (
-        <div className="flex items-center gap-1 text-xs text-slate-400">
-          <DollarSign className="w-3 h-3" />
-          <span>{costUsd > 0 ? formatCost(costUsd) : "…"}</span>
-          <span className="text-slate-300">this chat</span>
-        </div>
-      )}
+      <div className="flex items-center gap-2">
+        {/* Conversation export */}
+        {messages.length > 0 && conversationIdRef.current !== "new" && (
+          <div className="relative">
+            <button
+              type="button"
+              onClick={() => setExportConvMenuOpen((o) => !o)}
+              className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs text-slate-500 hover:text-slate-700 hover:bg-slate-100 border border-slate-200 transition-colors"
+            >
+              {exportingConvFormat
+                ? <Download className="h-3.5 w-3.5 animate-bounce" />
+                : <Download className="h-3.5 w-3.5" />
+              }
+              Export
+            </button>
+            {exportConvMenuOpen && (
+              <div className="absolute right-0 top-full mt-1 z-30 bg-white border border-slate-200 rounded-xl shadow-lg py-1 min-w-[150px]">
+                <p className="px-3 py-1.5 text-[10px] font-semibold text-slate-400 uppercase tracking-wider">Export chat as</p>
+                {(["pdf", "docx", "markdown"] as const).map((fmt) => (
+                  <button
+                    key={fmt}
+                    type="button"
+                    onClick={() => handleExportConversation(fmt)}
+                    className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-slate-700 hover:bg-slate-50 transition-colors"
+                  >
+                    <Download className="h-3 w-3 text-slate-400" />
+                    {fmt === "markdown" ? "Markdown (.md)" : `${fmt.toUpperCase()}`}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {(costUsd > 0 || isLoading) && messages.length > 0 && (
+          <div className="flex items-center gap-1 text-xs text-slate-400">
+            <DollarSign className="w-3 h-3" />
+            <span>{costUsd > 0 ? formatCost(costUsd) : "…"}</span>
+            <span className="text-slate-300">this chat</span>
+          </div>
+        )}
+      </div>
     </div>
   );
 
@@ -795,6 +869,7 @@ export default function ChatWindow({
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
+            onFocus={() => setTimeout(() => bottomRef.current?.scrollIntoView({ behavior: "smooth" }), 300)}
             placeholder={
               mode === "email"
                 ? "Describe the email you need…"
@@ -804,7 +879,7 @@ export default function ChatWindow({
                 ? "Ask about the attached files…"
                 : "Message time-4-action AI…"
             }
-            className="flex-1 bg-transparent text-sm text-slate-800 placeholder:text-slate-400 outline-none resize-none leading-relaxed max-h-40 py-0.5"
+            className="flex-1 bg-transparent text-sm text-slate-800 placeholder:text-slate-400 outline-none resize-none leading-relaxed max-h-40 py-0 align-middle"
             disabled={isLoading}
           />
           <div className="flex items-center gap-1 shrink-0" data-tour="send-btn">
@@ -834,7 +909,7 @@ export default function ChatWindow({
           </div>
 
           {/* Suggestion chips */}
-          <div data-tour="suggestion-chips" className="flex flex-wrap justify-center gap-2 mb-6">
+          <div data-tour="suggestion-chips" className="hidden lg:flex flex-wrap justify-center gap-2 mb-6">
             {CAPABILITIES.flatMap((cap) => cap.examples.slice(0, 1)).map((prompt) => (
               <button
                 key={prompt}

@@ -1,11 +1,12 @@
 import { UIMessage } from "ai";
-import { Check, Copy, Download, Mail } from "lucide-react";
-import { useCallback, useState } from "react";
+import { Check, Copy, Download, Mail, MoreHorizontal, FileText } from "lucide-react";
+import { useCallback, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import SyntaxHighlighter from "react-syntax-highlighter";
 import { githubGist } from "react-syntax-highlighter/dist/esm/styles/hljs";
 import remarkGfm from "remark-gfm";
 import EmailCard, { parseEmailFromText } from "./email-card";
+import DocumentCard, { parseDocumentFromText, isDocumentInProgress } from "./document-card";
 import type { PreviewFile } from "./file-preview-panel";
 
 // hljs languages supported by react-syntax-highlighter
@@ -514,10 +515,56 @@ export default function MessageBubble({
 
           {/* Text bubble — stripped of embedded file blocks */}
           {cleanText.trim() && (
-            <div className="rounded-2xl rounded-tr-sm px-4 py-3 text-sm leading-relaxed whitespace-pre-wrap bg-[#0f172a] text-white shadow-md">
+            <div className="rounded-2xl rounded-tr-sm px-4 py-3 text-sm leading-relaxed whitespace-pre-wrap break-words bg-[#0f172a] text-white shadow-md">
               {cleanText}
             </div>
           )}
+        </div>
+      </div>
+    );
+  }
+
+  // Fully parsed document/presentation → show card
+  const documentData = parseDocumentFromText(textContent);
+  if (documentData) {
+    return (
+      <div className="flex gap-3 items-start">
+        <img
+          src="/favicon.ico"
+          alt="logo"
+          className="hidden sm:block w-7 h-7 object-contain rounded-md shrink-0 mt-0.5"
+        />
+        <DocumentCard data={documentData} />
+      </div>
+    );
+  }
+
+  // Document still streaming → show animated placeholder
+  if (isDocumentInProgress(textContent)) {
+    return (
+      <div className="flex gap-3 items-start">
+        <img
+          src="/favicon.ico"
+          alt="logo"
+          className="hidden sm:block w-7 h-7 object-contain rounded-md shrink-0 mt-0.5"
+        />
+        <div className="rounded-2xl rounded-tl-sm bg-white shadow-sm border border-slate-200 overflow-hidden w-72">
+          <div className="h-9 bg-gradient-to-r from-slate-700 via-slate-600 to-slate-700 bg-[length:200%_100%] animate-[shimmer_1.4s_ease-in-out_infinite]" />
+          <div className="px-4 py-3 space-y-2.5">
+            <div className="h-3 w-40 rounded bg-slate-100 animate-pulse" />
+            <div className="h-2.5 w-full rounded bg-slate-100 animate-pulse" />
+            <div className="h-2.5 w-5/6 rounded bg-slate-100 animate-pulse" />
+            <div className="h-2.5 w-4/6 rounded bg-slate-100 animate-pulse" />
+          </div>
+          <div className="px-4 pb-3 flex items-center gap-2">
+            <FileText className="h-3.5 w-3.5 text-slate-400 animate-pulse shrink-0" />
+            <span className="text-xs text-slate-400">Generating document</span>
+            <span className="flex gap-0.5 ml-0.5">
+              {[0, 1, 2].map((i) => (
+                <span key={i} className="h-1 w-1 rounded-full bg-slate-400 animate-bounce" style={{ animationDelay: `${i * 0.15}s` }} />
+              ))}
+            </span>
+          </div>
         </div>
       </div>
     );
@@ -591,7 +638,50 @@ export default function MessageBubble({
   const gmailAttachments = extractGmailAttachments(message);
 
   return (
-    <div className="flex gap-3 items-start">
+    <AssistantBubble textContent={textContent} gmailAttachments={gmailAttachments} onFilePreview={onFilePreview} />
+  );
+}
+
+function AssistantBubble({
+  textContent,
+  gmailAttachments,
+  onFilePreview,
+}: {
+  textContent: string;
+  gmailAttachments: GmailAttachmentResult[];
+  onFilePreview?: (file: PreviewFile) => void;
+}) {
+  const [exportMenuOpen, setExportMenuOpen] = useState(false);
+  const [exportingFormat, setExportingFormat] = useState<string | null>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  async function exportMessage(format: "pdf" | "docx" | "markdown") {
+    if (exportingFormat) return;
+    setExportingFormat(format);
+    setExportMenuOpen(false);
+    try {
+      const res = await fetch("/api/export", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ source: "message", format, content: textContent, title: "Message" }),
+      });
+      if (!res.ok) throw new Error("Export failed");
+      const blob = await res.blob();
+      const ext = format === "markdown" ? "md" : format;
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = `message.${ext}`;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+    } catch (e) {
+      console.error("[export message]", e);
+    } finally {
+      setExportingFormat(null);
+    }
+  }
+
+  return (
+    <div className="flex gap-3 items-start group/msg relative">
       {/* AI avatar */}
       <img
         src="/favicon.ico"
@@ -600,7 +690,7 @@ export default function MessageBubble({
       />
 
       {/* Bubble */}
-      <div className="max-w-[85%] sm:max-w-[78%] rounded-2xl rounded-tl-sm px-4 py-3 text-sm leading-relaxed bg-white shadow-sm border border-slate-200 text-slate-800">
+      <div className="max-w-[85%] sm:max-w-[78%] min-w-0 rounded-2xl rounded-tl-sm px-4 py-3 text-sm leading-relaxed break-words bg-white shadow-sm border border-slate-200 text-slate-800">
         {gmailAttachments.length > 0 && (
           <GmailAttachmentGroup attachments={gmailAttachments} onFilePreview={onFilePreview} />
         )}
@@ -657,7 +747,7 @@ export default function MessageBubble({
                 href={href}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="text-blue-600 hover:text-blue-700 underline underline-offset-2"
+                className="text-blue-600 hover:text-blue-700 underline underline-offset-2 break-all"
               >
                 {children}
               </a>
@@ -691,6 +781,39 @@ export default function MessageBubble({
         >
           {autoFenceDsv(textContent)}
         </ReactMarkdown>
+      </div>
+
+      {/* Per-message export button — appears on hover */}
+      <div className="relative self-start mt-1" ref={menuRef}>
+        <button
+          type="button"
+          onClick={() => setExportMenuOpen((o) => !o)}
+          className="opacity-0 group-hover/msg:opacity-100 transition-opacity p-1.5 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-100"
+          aria-label="Export message"
+          title="Export message"
+        >
+          {exportingFormat
+            ? <Download className="h-3.5 w-3.5 animate-bounce" />
+            : <MoreHorizontal className="h-3.5 w-3.5" />
+          }
+        </button>
+
+        {exportMenuOpen && (
+          <div className="absolute left-0 top-full mt-1 z-30 bg-white border border-slate-200 rounded-xl shadow-lg py-1 min-w-[130px]">
+            <p className="px-3 py-1.5 text-[10px] font-semibold text-slate-400 uppercase tracking-wider">Export as</p>
+            {(["pdf", "docx", "markdown"] as const).map((fmt) => (
+              <button
+                key={fmt}
+                type="button"
+                onClick={() => exportMessage(fmt)}
+                className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-slate-700 hover:bg-slate-50 transition-colors"
+              >
+                <Download className="h-3 w-3 text-slate-400" />
+                {fmt === "markdown" ? "Markdown" : fmt.toUpperCase()}
+              </button>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );
