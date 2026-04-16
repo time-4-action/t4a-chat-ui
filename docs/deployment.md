@@ -60,17 +60,27 @@ CMD ["node", "server.js"]
 ### Using Docker directly
 
 ```bash
-docker build -t etiamsi/t4a-ai-agent-ui:latest .
-docker push etiamsi/t4a-ai-agent-ui:latest
+docker build -t time4action/t4a-chat-ui:latest .
+docker push time4action/t4a-chat-ui:latest
 ```
 
-### Using the build script (Windows)
+### Using the build scripts (Windows)
 
 ```bash
-./build-and-push.cmd
+# Build with timestamp tag (default)
+scripts/build.bat
+
+# Build with specific tag
+scripts/build.bat --latest
+scripts/build.bat --dev
+
+# Push with matching tag
+scripts/push.bat --latest
+scripts/push.bat --dev
+scripts/push.bat          # pushes timestamp-tagged image
 ```
 
-The PowerShell script reads `NEXT_PUBLIC_*` variables from `.env.local` and passes them as build args.
+The build script reads `NEXT_PUBLIC_*` variables from `.env.local` and passes them as build args.
 
 ---
 
@@ -79,7 +89,7 @@ The PowerShell script reads `NEXT_PUBLIC_*` variables from `.env.local` and pass
 ```yaml
 services:
   ai-agent-ui:
-    image: etiamsi/t4a-ai-agent-ui:latest
+    image: time4action/t4a-chat-ui:latest
     network_mode: host
     env_file: .env.local
     environment:

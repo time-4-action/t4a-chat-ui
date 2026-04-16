@@ -1,6 +1,6 @@
 services:
   ai-agent-ui:
-    image: etiamsi/t4a-ai-agent-ui:latest
+    image: time4action/t4a-chat-ui:latest
     network_mode: host   # container uses host network → MongoDB sees server's real IP
     env_file:
       - .env.local
