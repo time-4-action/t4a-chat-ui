@@ -16,7 +16,10 @@
       "Bash(node -e \":*)",
       "WebFetch(domain:commons.wikimedia.org)",
       "Bash(cd:*)",
-      "Bash(find /c/Users/grega/Documents/Priv/Grega/Development/ai-agent-ui -maxdepth 3 \\\\\\(-name service-worker* -o -name sw.js -o -name *service* \\\\\\) -type f)"
+      "Bash(find /c/Users/grega/Documents/Priv/Grega/Development/ai-agent-ui -maxdepth 3 \\\\\\(-name service-worker* -o -name sw.js -o -name *service* \\\\\\) -type f)",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)",
+      "Bash(git push *)"
     ]
   }
 }
