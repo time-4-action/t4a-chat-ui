@@ -12,7 +12,7 @@ import ChatModeSelector, { ChatMode } from "./chat-mode-selector";
 import ModelSelector from "./model-selector";
 import ToneSelector from "./tone-selector";
 import type { ToneDoc } from "./create-tone-modal";
-import { ArrowUp, DollarSign, Download, Paperclip, Square, X, AlertCircle, Clock, Wifi, RefreshCw } from "lucide-react";
+import { ArrowUp, DollarSign, Download, Eye, Paperclip, Square, X, AlertCircle, Clock, Wifi, RefreshCw } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { DEFAULT_MODEL, ModelId, formatCost } from "@/lib/models";
 
@@ -21,6 +21,8 @@ interface Props {
   initialMessages?: UIMessage[];
   initialModel?: ModelId;
   initialCost?: number;
+  readOnly?: boolean;
+  ownerId?: string;
 }
 
 interface AttachedFile {
@@ -291,6 +293,8 @@ export default function ChatWindow({
   initialMessages = [],
   initialModel,
   initialCost = 0,
+  readOnly = false,
+  ownerId,
 }: Props) {
   const [input, setInput] = useState("");
   const [mode, setMode] = useState<ChatMode>(null);
@@ -663,6 +667,19 @@ export default function ChatWindow({
     }
   }
 
+  const readOnlyBanner = readOnly ? (
+    <div className="shrink-0 px-4 py-2 bg-amber-50 border-b border-amber-200 flex items-center gap-2">
+      <Eye className="h-3.5 w-3.5 text-amber-700 shrink-0" />
+      <span className="text-xs text-amber-900">
+        <strong className="font-semibold">Read-only admin view.</strong>{" "}
+        Owned by{" "}
+        <code className="px-1 py-0.5 bg-amber-100 rounded font-mono text-[11px]">
+          {ownerId ?? "unknown"}
+        </code>
+      </span>
+    </div>
+  ) : null;
+
   const topBar = (
     <div className="hidden lg:flex items-center justify-between px-4 py-2 border-b border-slate-200 bg-white/80 backdrop-blur-sm shrink-0">
       <div data-tour="model-selector" className="inline-flex">
@@ -707,7 +724,7 @@ export default function ChatWindow({
 
       <div className="flex items-center gap-2">
         {/* Conversation export */}
-        {messages.length > 0 && conversationIdRef.current !== "new" && (
+        {!readOnly && messages.length > 0 && conversationIdRef.current !== "new" && (
           <div className="relative">
             <button
               type="button"
@@ -898,38 +915,48 @@ export default function ChatWindow({
 
   const pageContent = isEmpty ? (
     <>
+      {readOnlyBanner}
       {topBar}
       <div className="flex-1 flex flex-col items-center justify-center px-4">
         <div className="w-full max-w-3xl">
           <div className="text-center mb-8">
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img src="/favicon.ico" alt="logo" className="w-14 h-14 object-contain mx-auto mb-4" />
-            <h2 className="text-slate-800 font-semibold text-2xl">How can I help you?</h2>
-            <p className="text-slate-400 text-sm mt-1.5">Ask about products, orders, partners, warehouse or delivery.</p>
+            <h2 className="text-slate-800 font-semibold text-2xl">
+              {readOnly ? "This conversation is empty." : "How can I help you?"}
+            </h2>
+            {!readOnly && (
+              <p className="text-slate-400 text-sm mt-1.5">Ask about products, orders, partners, warehouse or delivery.</p>
+            )}
           </div>
 
-          {/* Suggestion chips */}
-          <div data-tour="suggestion-chips" className="hidden lg:flex flex-wrap justify-center gap-2 mb-6">
-            {CAPABILITIES.flatMap((cap) => cap.examples.slice(0, 1)).map((prompt) => (
-              <button
-                key={prompt}
-                onClick={() => handlePromptSelect(prompt)}
-                className="text-xs text-slate-600 border border-slate-200 rounded-full px-3.5 py-1.5 hover:bg-slate-100 hover:border-slate-300 transition-colors"
-              >
-                {prompt}
-              </button>
-            ))}
-          </div>
+          {!readOnly && (
+            <>
+              {/* Suggestion chips */}
+              <div data-tour="suggestion-chips" className="hidden lg:flex flex-wrap justify-center gap-2 mb-6">
+                {CAPABILITIES.flatMap((cap) => cap.examples.slice(0, 1)).map((prompt) => (
+                  <button
+                    key={prompt}
+                    onClick={() => handlePromptSelect(prompt)}
+                    className="text-xs text-slate-600 border border-slate-200 rounded-full px-3.5 py-1.5 hover:bg-slate-100 hover:border-slate-300 transition-colors"
+                  >
+                    {prompt}
+                  </button>
+                ))}
+              </div>
 
-          {inputBox}
-          <p className="text-center text-[11px] text-slate-400 mt-2">
-            Shift+Enter for new line · Enter to send · Drag & drop files
-          </p>
+              {inputBox}
+              <p className="text-center text-[11px] text-slate-400 mt-2">
+                Shift+Enter for new line · Enter to send · Drag & drop files
+              </p>
+            </>
+          )}
         </div>
       </div>
     </>
   ) : (
     <>
+      {readOnlyBanner}
       {topBar}
       <div className="flex-1 overflow-y-auto">
         <div className="max-w-3xl mx-auto px-4 py-6 space-y-5">
@@ -951,24 +978,26 @@ export default function ChatWindow({
           <div ref={bottomRef} />
         </div>
       </div>
-      <div className="shrink-0 py-4 pb-[calc(1rem+env(safe-area-inset-bottom,0px))] bg-gray-100 border-t border-gray-200">
-        <div className="max-w-3xl mx-auto px-4">
-          {inputBox}
-          <p className="text-center text-[11px] text-slate-400 mt-2">
-            Shift+Enter for new line · Enter to send · Drag & drop files
-          </p>
+      {!readOnly && (
+        <div className="shrink-0 py-4 pb-[calc(1rem+env(safe-area-inset-bottom,0px))] bg-gray-100 border-t border-gray-200">
+          <div className="max-w-3xl mx-auto px-4">
+            {inputBox}
+            <p className="text-center text-[11px] text-slate-400 mt-2">
+              Shift+Enter for new line · Enter to send · Drag & drop files
+            </p>
+          </div>
         </div>
-      </div>
+      )}
     </>
   );
 
   return (
     <div
       className="relative flex h-full bg-gray-100"
-      onDragEnter={handleDragEnter}
-      onDragLeave={handleDragLeave}
-      onDragOver={handleDragOver}
-      onDrop={handleDrop}
+      onDragEnter={readOnly ? undefined : handleDragEnter}
+      onDragLeave={readOnly ? undefined : handleDragLeave}
+      onDragOver={readOnly ? undefined : handleDragOver}
+      onDrop={readOnly ? undefined : handleDrop}
     >
       <div className="flex-1 flex flex-col min-w-0">
         {pageContent}
@@ -979,7 +1008,7 @@ export default function ChatWindow({
       )}
 
       {/* Full-page drag overlay */}
-      {isDragging && (
+      {!readOnly && isDragging && (
         <div className="absolute inset-0 z-50 flex flex-col items-center justify-center gap-3 bg-blue-50/90 backdrop-blur-sm border-4 border-dashed border-blue-400 pointer-events-none">
           <div className="flex items-center justify-center h-16 w-16 rounded-2xl bg-blue-100">
             <Paperclip className="h-7 w-7 text-blue-500" />
