@@ -426,6 +426,19 @@ export async function POST(req: NextRequest) {
 
   await connectDB();
 
+  // Admins can VIEW any conversation, but writes (new messages) are owner-only.
+  // Without this check, an admin opening someone else's link and typing into the
+  // input would append messages to that user's conversation under the admin's identity.
+  if (conversationId) {
+    const owner = await Conversation.findById(conversationId).select("userId").lean<{ userId: string }>();
+    if (owner && owner.userId !== session.user.sub) {
+      return NextResponse.json(
+        { error: "forbidden", message: "Cannot send messages in another user's conversation." },
+        { status: 403 }
+      );
+    }
+  }
+
   // ── Cost limit check ─────────────────────────────────────────────────────
   const userLimit = await UserLimit.findOne({ userId: session.user.sub });
   if (userLimit) {
