@@ -5,6 +5,7 @@ import { redirect, notFound } from "next/navigation";
 import ChatWindow from "@/components/chat-window";
 import { UIMessage } from "ai";
 import { DEFAULT_MODEL, ModelId } from "@/lib/models";
+import { hasAdminAll } from "@/lib/permissions";
 import type { Metadata } from "next";
 
 export async function generateMetadata({
@@ -29,10 +30,10 @@ export default async function ConversationPage({
   if (!session) redirect("/auth/login");
 
   await connectDB();
-  const conversation = await Conversation.findOne({
-    _id: id,
-    userId: session.user.sub,
-  });
+  const filter = hasAdminAll(session)
+    ? { _id: id }
+    : { _id: id, userId: session.user.sub };
+  const conversation = await Conversation.findOne(filter);
 
   if (!conversation) notFound();
 
@@ -55,12 +56,16 @@ export default async function ConversationPage({
     ],
   }));
 
+  const isAdminView = conv.userId !== session.user.sub;
+
   return (
     <ChatWindow
       conversationId={id}
       initialMessages={initialMessages}
       initialModel={(conv.model as ModelId) ?? DEFAULT_MODEL}
       initialCost={conv.totalCostUsd ?? 0}
+      readOnly={isAdminView}
+      ownerId={isAdminView ? conv.userId : undefined}
     />
   );
 }

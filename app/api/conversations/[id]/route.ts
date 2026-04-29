@@ -1,6 +1,7 @@
 import { auth0 } from "@/lib/auth";
 import { connectDB } from "@/lib/mongodb";
 import { Conversation } from "@/models/conversation";
+import { hasAdminAll } from "@/lib/permissions";
 import { NextRequest, NextResponse } from "next/server";
 
 export async function GET(
@@ -12,10 +13,10 @@ export async function GET(
 
   const { id } = await params;
   await connectDB();
-  const conversation = await Conversation.findOne({
-    _id: id,
-    userId: session.user.sub,
-  }).lean();
+  const filter = hasAdminAll(session)
+    ? { _id: id }
+    : { _id: id, userId: session.user.sub };
+  const conversation = await Conversation.findOne(filter).lean();
 
   if (!conversation) return NextResponse.json({ error: "Not found" }, { status: 404 });
   return NextResponse.json(conversation);
