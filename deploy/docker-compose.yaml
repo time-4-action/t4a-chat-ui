@@ -1,0 +1,14 @@
+# Production compose for /data/stack/apps/time-4-action/chat on the VM (DEPLOY_DIR
+# in the workflow). CI exports APP_IMAGE=ghcr.io/time-4-action/t4a-chat-ui:<commit sha>;
+# without it this runs :latest. The VM never builds: images come from GHCR. Copy
+# changes to the server by hand; the deploy only swaps images.
+services:
+  ai-agent-ui:
+    image: ${APP_IMAGE:-ghcr.io/time-4-action/t4a-chat-ui:latest}
+    network_mode: host   # container uses host network → MongoDB sees server's real IP
+    env_file:
+      - .env.local
+    environment:
+      AUTH0_BASE_URL: ${AUTH0_BASE_URL:-https://chat.time-4-action.com}
+      PORT: 3003          # app listens on 3003 directly (ports: ignored with host networking)
+    restart: unless-stopped

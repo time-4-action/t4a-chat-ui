@@ -55,54 +55,96 @@ CMD ["node", "server.js"]
 
 ---
 
-## Build & Push
+## CI/CD
 
-### Using Docker directly
+`.github/workflows/deploy.yml` (workflow `ci`) runs `check` → `deploy` → `verify`.
 
-```bash
-docker build -t time4action/t4a-chat-ui:latest .
-docker push time4action/t4a-chat-ui:latest
-```
+**check** runs on every pull request and every push to `main`: `npm ci`,
+`npm run typecheck` and `npm run build`. `npm run lint` is not
+part of the check yet: the code has pre-existing lint errors (mostly
+`no-explicit-any`) to clear first. A newer push to a pull
+request cancels its running check; runs on `main` are queued, so pushes deploy
+strictly in order.
 
-### Using the build scripts (Windows)
+**deploy** runs only on `main` after a green check, one at a time. It builds the
+image on GitHub Actions with the commit SHA baked in as `APP_VERSION`, pushes
+`ghcr.io/time-4-action/t4a-chat-ui:<sha>` and `:latest` to GitHub Container
+Registry, then SSHes to the VM as `deploy` and, in
+`/data/stack/apps/time-4-action/chat` (override with the `DEPLOY_DIR` repository
+variable):
 
-```bash
-# Build with timestamp tag (default)
-scripts/build.bat
+1. records the image the running `ai-agent-ui` container uses;
+2. logs in to `ghcr.io` with the job's own `GITHUB_TOKEN` (valid only while the
+   job runs; logged out again on exit, so the VM stores no registry
+   credential), `docker compose pull ai-agent-ui` (three attempts) and
+   `docker compose up -d` with `APP_IMAGE` exported to the new SHA;
+3. waits up to 60 s for `http://127.0.0.1:3003/healthz` to answer 200;
+4. checks the container reports `APP_VERSION` equal to the commit SHA.
 
-# Build with specific tag
-scripts/build.bat --latest
-scripts/build.bat --dev
+If 3 or 4 fails it prints the logs, rolls back to the recorded image and fails
+the run. **verify** then requests `/healthz` on the public URL
+(`https://chat.time-4-action.com`, override with the `PRODUCTION_URL`
+repository variable).
 
-# Push with matching tag
-scripts/push.bat --latest
-scripts/push.bat --dev
-scripts/push.bat          # pushes timestamp-tagged image
-```
+`/healthz` (`app/healthz/route.ts`) is excluded from the auth proxy
+(`proxy.ts`) and does not touch MongoDB, so a database outage never triggers a
+rollback.
 
-The build script reads `NEXT_PUBLIC_*` variables from `.env.local` and passes them as build args.
+The deploy only swaps images. `.env.local` and `docker-compose.yaml` on the
+server are edited by hand; the server copy of the compose file is
+`deploy/docker-compose.yaml` (the root one is for local builds). To go back to
+an older release, re-run that commit's workflow, or on the server:
+`export APP_IMAGE=ghcr.io/time-4-action/t4a-chat-ui:<sha> && docker compose up -d`
+(a `docker login ghcr.io` first if the package is private).
 
----
+### GitHub settings
 
-## Docker Compose
+The image lives in GHCR as `ghcr.io/time-4-action/t4a-chat-ui`. Pushing and
+pulling use the workflow's `GITHUB_TOKEN` (`packages: write` on the deploy job),
+so there is no registry secret. The `org.opencontainers.image.source` label in
+the Dockerfile links the package to this repository.
 
-```yaml
-services:
-  ai-agent-ui:
-    image: time4action/t4a-chat-ui:latest
-    network_mode: host
-    env_file: .env.local
-    environment:
-      AUTH0_BASE_URL: https://chat.time-4-action.com
-      PORT: 3003
-    restart: unless-stopped
-```
+Organization secrets (shared with the other time-4-action repos on this VM),
+which must be made available to this repository:
 
-**Notes:**
-- `network_mode: host` — uses the host's network stack (no port mapping needed)
-- `env_file: .env.local` — loads all environment variables from file
-- Override `AUTH0_BASE_URL` for production domain
-- Override `PORT` if needed (default: 3000)
+| Secret                    | Value |
+| ------------------------- | ----- |
+| `PROD_DEPLOY_HOST`        | The VM's hostname or IP |
+| `PROD_DEPLOY_SSH_KEY`     | Private key whose public half is in `deploy`'s `authorized_keys` |
+| `PROD_DEPLOY_FINGERPRINT` | `SHA256:…` from `ssh-keygen -lf /etc/ssh/ssh_host_ecdsa_key.pub` |
+
+The deploy job uses the `production` environment; create it in the repository
+settings (optionally with required reviewers).
+
+Repository variables (baked into the client bundle at build time, replacing the
+values `scripts/build.bat` reads from `.env.local`): `NEXT_PUBLIC_APP_NAME`,
+`NEXT_PUBLIC_COMPANY_COLOR`, `NEXT_PUBLIC_DEEPGRAM_API_KEY`. Unset ones build
+empty, as they do locally.
+
+The SSH user is `deploy` unless the `DEPLOY_USER` repository variable names
+another. It must be in the `docker` group, be able to write the server
+directory, and have `curl`.
+
+### Server setup (once)
+
+The server's `docker-compose.yaml` must be `deploy/docker-compose.yaml`. A copy
+with a `build:` section or a fixed `image:` tag ignores `APP_IMAGE`, so every
+deploy would fail its `APP_VERSION` check and roll back. `.env.local` sits
+beside it and holds the runtime secrets (`ANTHROPIC_API_KEY`, `AUTH0_*`,
+`MONGODB_URI`, …). The service keeps the name `ai-agent-ui`, so the first
+deploy takes over the container that was started by hand.
+
+### Dependency updates
+
+`.github/dependabot.yml` opens at most one grouped pull request per ecosystem a
+month (npm minor + patch, GitHub Actions); each goes through `check` like any
+other pull request. Major npm versions are left to a deliberate upgrade.
+
+### Manual build (Windows)
+
+`scripts/build.bat` / `scripts/push.bat` still build and push
+`time4action/t4a-chat-ui` to Docker Hub from `.env.local`. Production no longer
+uses that image.
 
 ---
 
@@ -164,8 +206,8 @@ const nextConfig = {
 - [ ] MongoDB IP whitelist includes the server's IP
 - [ ] MCP server reachable from the container
 - [ ] `NEXT_PUBLIC_*` vars provided at build time
-- [ ] Docker image built and pushed to registry
-- [ ] Container starts and health check passes
+- [ ] GitHub secrets, variables and `production` environment set (see CI/CD)
+- [ ] `ci` workflow green on `main` (deploy + verify)
 - [ ] Login flow works end-to-end
 - [ ] MCP tools respond correctly
 
@@ -175,6 +217,7 @@ const nextConfig = {
 
 ### Health Checks
 
+- **Liveness:** `GET /healthz` returns `ok` (no auth, no MongoDB)
 - **App:** `GET /` should redirect to `/chat` (200 after auth)
 - **MCP:** `GET /api/mcp/status` returns MCP server connectivity
 - **Gmail:** `GET /api/gmail/status` returns per-user Gmail connection status

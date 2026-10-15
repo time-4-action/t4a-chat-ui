@@ -38,7 +38,8 @@ export const config = {
      * - _next/static (static files)
      * - _next/image (image optimization files)
      * - favicon.ico, sitemap.xml, robots.txt, static assets
+     * - healthz (deploy health check)
      */
-    "/((?!_next/static|_next/image|favicon.ico|sitemap.xml|robots.txt|.*\\.svg|.*\\.png|.*\\.ico).*)",
+    "/((?!_next/static|_next/image|favicon.ico|sitemap.xml|robots.txt|healthz|.*\\.svg|.*\\.png|.*\\.ico).*)",
   ],
 };
