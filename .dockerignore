@@ -10,3 +10,8 @@ README.md
 .dockerignore
 Dockerfile
 docker-compose.yaml
+.github
+.claude
+docs
+scripts
+deploy
