@@ -7,6 +7,7 @@ import ConversationSidebar from "@/components/conversation-sidebar";
 import { TourProvider } from "@/lib/tour-context";
 import GuidedTour from "@/components/guided-tour";
 import NetworkStatus from "@/components/network-status";
+import MaintenanceBanner from "@/components/maintenance-banner";
 import InstallPrompt from "@/components/install-prompt";
 
 export default function ChatLayout({ children }: { children: React.ReactNode }) {
@@ -65,6 +66,7 @@ export default function ChatLayout({ children }: { children: React.ReactNode }) 
         onTouchStart={handleTouchStart}
         onTouchEnd={handleTouchEnd}
       >
+        <MaintenanceBanner />
         <NetworkStatus />
         <InstallPrompt />
         {/* Mobile top bar */}
