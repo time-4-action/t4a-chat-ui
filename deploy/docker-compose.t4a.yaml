@@ -1,0 +1,41 @@
+# Production compose for /srv/chat on t4a (Hetzner; time-4-action/t4a-infra, servers/t4a).
+# Save it there as docker-compose.yaml, next to .env.local. CI exports
+# APP_IMAGE=ghcr.io/time-4-action/t4a-chat-ui:<sha> (DEPLOY_DIR=/srv/chat on the `production` environment);
+# without it this runs :latest. The server never builds; copy changes to this file by hand.
+#
+# Traefik (/srv/edge) routes chat.time-4-action.com here, behind Cloudflare. Responses stream (SSE):
+# Traefik has no write timeout and its compress middleware skips text/event-stream, so nothing to set.
+# MongoDB is t4a's shared one (/srv/mongo): MONGODB_URI in .env.local is mongodb://chat:...@mongo:27017/t4a.
+# On t2 it ran with host networking only so MongoDB saw the server's IP; here it uses normal networks.
+services:
+  ai-agent-ui:
+    image: ${APP_IMAGE:-ghcr.io/time-4-action/t4a-chat-ui:latest}
+    env_file:
+      - .env.local
+    environment:
+      AUTH0_BASE_URL: ${AUTH0_BASE_URL:-https://chat.time-4-action.com}
+      PORT: 3003
+    # Loopback only, for CI's health check (127.0.0.1:3003/healthz). Docker-published ports skip ufw, so
+    # never 0.0.0.0.
+    ports:
+      - "127.0.0.1:3003:3003"
+    mem_limit: 1g
+    networks:
+      - edge
+      - mongo
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=edge
+      - traefik.http.routers.chat.rule=Host(`chat.time-4-action.com`)
+      - traefik.http.services.chat.loadbalancer.server.port=3003
+    logging:
+      options:
+        max-size: 10m
+        max-file: "3"
+    restart: unless-stopped
+
+networks:
+  edge:
+    external: true
+  mongo:
+    external: true
